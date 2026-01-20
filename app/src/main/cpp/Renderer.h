@@ -20,6 +20,12 @@ struct DebugStats {
     const char* tracking_state;
     int point_count;
     int map_points;
+    int bearing_landmarks;
+    int metric_landmarks;
+    int tracked_features;
+    int stable_tracks;
+    float avg_track_age;
+    float depth_hit_rate;
     float fps;
     const char* torch_mode;
     bool torch_enabled;
@@ -77,6 +83,7 @@ private:
     float projection_matrix_[16];
     float last_good_view_[16];  // For rendering map when not tracking
     float last_good_proj_[16];
+    float last_good_world_from_camera_[16];
     bool has_good_matrices_ = false;
     
     // FPS tracking
@@ -90,6 +97,11 @@ private:
     // Stats tracking
     int current_point_count_ = 0;
     int current_feature_count_ = 0;
+    int current_stable_track_count_ = 0;
+    float current_avg_track_age_ = 0.0f;
+    float current_depth_hit_rate_ = 0.0f;
+    int current_bearing_landmarks_ = 0;
+    int current_metric_landmarks_ = 0;
 
     // CPU image buffer (Y plane)
     uint8_t* camera_image_buffer_ = nullptr;

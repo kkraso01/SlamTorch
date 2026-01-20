@@ -50,6 +50,12 @@ class MainActivity : GameActivity() {
         val trackingState: String,
         val pointCount: Int,
         val mapPoints: Int,
+        val bearingLandmarks: Int,
+        val metricLandmarks: Int,
+        val trackedFeatures: Int,
+        val stableTracks: Int,
+        val avgTrackAge: Float,
+        val depthHitRate: Float,
         val fps: Float,
         val torchMode: String,
         val torchEnabled: Boolean,
@@ -144,7 +150,10 @@ class MainActivity : GameActivity() {
                             Track: ${stats.trackingState}
                             Fail: ${stats.lastFailureReason}
                             Points: ${stats.pointCount}
-                            Map: ${stats.mapPoints}
+                            Map: ${stats.mapPoints} (B:${stats.bearingLandmarks} M:${stats.metricLandmarks})
+                            Tracks: ${stats.trackedFeatures} (Stable: ${stats.stableTracks})
+                            Avg age: ${"%.1f".format(stats.avgTrackAge)}
+                            Depth hit: ${"%.0f".format(stats.depthHitRate)}%
                             FPS: ${"%.1f".format(stats.fps)}
                             Torch: $torchState
                             Depth: ${if (stats.depthEnabled) "YES" else "NO"}
