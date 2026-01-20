@@ -35,6 +35,10 @@ const char* kFragmentShader = R"(
 constexpr float kDedupeDistance = 0.05f;
 constexpr int kMaxAge = 300;
 constexpr float kMinConfidence = 0.05f;
+constexpr float kBearingDotThreshold = 0.995f;
+constexpr float kFakeDepthBase = 2.0f;
+constexpr float kFakeDepthGrowth = 0.05f;
+constexpr float kFakeDepthMax = 6.0f;
 }
 
 LandmarkMap::LandmarkMap(int max_points)
@@ -67,8 +71,9 @@ void LandmarkMap::BeginFrame() {
     }
 }
 
-void LandmarkMap::AddObservation(const float* world_pos, float confidence) {
+void LandmarkMap::AddMetricObservation(const float* world_pos, const float* bearing, float confidence) {
     if (!world_pos) return;
+    if (!bearing) return;
     if (confidence <= 0.0f) return;
 
     const float dx_thresh = kDedupeDistance * kDedupeDistance;
@@ -77,7 +82,7 @@ void LandmarkMap::AddObservation(const float* world_pos, float confidence) {
 
     for (int i = 0; i < point_count_; ++i) {
         Landmark& lm = landmarks_[i];
-        if (lm.confidence <= 0.0f) continue;
+        if (lm.confidence <= 0.0f || !lm.has_metric_depth) continue;
         const float dx = lm.x - world_pos[0];
         const float dy = lm.y - world_pos[1];
         const float dz = lm.z - world_pos[2];
@@ -94,8 +99,38 @@ void LandmarkMap::AddObservation(const float* world_pos, float confidence) {
         lm.x = lm.x * (1.0f - blend) + world_pos[0] * blend;
         lm.y = lm.y * (1.0f - blend) + world_pos[1] * blend;
         lm.z = lm.z * (1.0f - blend) + world_pos[2] * blend;
+        lm.bearing[0] = lm.bearing[0] * (1.0f - blend) + bearing[0] * blend;
+        lm.bearing[1] = lm.bearing[1] * (1.0f - blend) + bearing[1] * blend;
+        lm.bearing[2] = lm.bearing[2] * (1.0f - blend) + bearing[2] * blend;
         lm.confidence = std::min(1.0f, lm.confidence + confidence * 0.2f);
         lm.last_seen = frame_index_;
+        lm.seen_count++;
+        return;
+    }
+
+    int bearing_index = -1;
+    float best_dot = kBearingDotThreshold;
+    for (int i = 0; i < point_count_; ++i) {
+        Landmark& lm = landmarks_[i];
+        if (lm.confidence <= 0.0f || lm.has_metric_depth) continue;
+        const float dot = lm.bearing[0] * bearing[0] +
+                          lm.bearing[1] * bearing[1] +
+                          lm.bearing[2] * bearing[2];
+        if (dot > best_dot) {
+            best_dot = dot;
+            bearing_index = i;
+        }
+    }
+
+    if (bearing_index >= 0) {
+        Landmark& lm = landmarks_[bearing_index];
+        lm.x = world_pos[0];
+        lm.y = world_pos[1];
+        lm.z = world_pos[2];
+        lm.has_metric_depth = true;
+        lm.confidence = std::min(1.0f, lm.confidence + confidence * 0.3f);
+        lm.last_seen = frame_index_;
+        lm.seen_count++;
         return;
     }
 
@@ -103,14 +138,88 @@ void LandmarkMap::AddObservation(const float* world_pos, float confidence) {
     landmarks_[idx].x = world_pos[0];
     landmarks_[idx].y = world_pos[1];
     landmarks_[idx].z = world_pos[2];
+    landmarks_[idx].bearing[0] = bearing[0];
+    landmarks_[idx].bearing[1] = bearing[1];
+    landmarks_[idx].bearing[2] = bearing[2];
     landmarks_[idx].confidence = std::min(1.0f, confidence);
     landmarks_[idx].age = 0;
     landmarks_[idx].last_seen = frame_index_;
+    landmarks_[idx].seen_count = 1;
+    landmarks_[idx].has_metric_depth = true;
 
     write_index_ = (write_index_ + 1) % max_points_;
     if (point_count_ < max_points_) {
         point_count_++;
     }
+}
+
+void LandmarkMap::AddBearingObservation(const float* bearing, float confidence) {
+    if (!bearing) return;
+    if (confidence <= 0.0f) return;
+
+    int best_index = -1;
+    float best_dot = kBearingDotThreshold;
+    for (int i = 0; i < point_count_; ++i) {
+        Landmark& lm = landmarks_[i];
+        if (lm.confidence <= 0.0f || lm.has_metric_depth) continue;
+        const float dot = lm.bearing[0] * bearing[0] +
+                          lm.bearing[1] * bearing[1] +
+                          lm.bearing[2] * bearing[2];
+        if (dot > best_dot) {
+            best_dot = dot;
+            best_index = i;
+        }
+    }
+
+    if (best_index >= 0) {
+        Landmark& lm = landmarks_[best_index];
+        const float blend = 0.2f;
+        lm.bearing[0] = lm.bearing[0] * (1.0f - blend) + bearing[0] * blend;
+        lm.bearing[1] = lm.bearing[1] * (1.0f - blend) + bearing[1] * blend;
+        lm.bearing[2] = lm.bearing[2] * (1.0f - blend) + bearing[2] * blend;
+        lm.confidence = std::min(1.0f, lm.confidence + confidence * 0.2f);
+        lm.last_seen = frame_index_;
+        lm.seen_count++;
+        return;
+    }
+
+    int idx = write_index_;
+    landmarks_[idx] = Landmark();
+    landmarks_[idx].bearing[0] = bearing[0];
+    landmarks_[idx].bearing[1] = bearing[1];
+    landmarks_[idx].bearing[2] = bearing[2];
+    landmarks_[idx].confidence = std::min(1.0f, confidence);
+    landmarks_[idx].age = 0;
+    landmarks_[idx].last_seen = frame_index_;
+    landmarks_[idx].seen_count = 1;
+    landmarks_[idx].has_metric_depth = false;
+
+    write_index_ = (write_index_ + 1) % max_points_;
+    if (point_count_ < max_points_) {
+        point_count_++;
+    }
+}
+
+int LandmarkMap::GetMetricCount() const {
+    int count = 0;
+    for (int i = 0; i < point_count_; ++i) {
+        const Landmark& lm = landmarks_[i];
+        if (lm.confidence > 0.0f && lm.has_metric_depth) {
+            count++;
+        }
+    }
+    return count;
+}
+
+int LandmarkMap::GetBearingCount() const {
+    int count = 0;
+    for (int i = 0; i < point_count_; ++i) {
+        const Landmark& lm = landmarks_[i];
+        if (lm.confidence > 0.0f && !lm.has_metric_depth) {
+            count++;
+        }
+    }
+    return count;
 }
 
 void LandmarkMap::InitGL() {
@@ -151,28 +260,62 @@ void LandmarkMap::CleanupGL() {
     if (program_) glDeleteProgram(program_);
 }
 
-void LandmarkMap::BuildColor(float confidence, int age, float* out_rgba) const {
+void LandmarkMap::BuildColor(float confidence, int age, bool has_metric_depth, float* out_rgba) const {
+    if (confidence <= 0.0f) {
+        out_rgba[0] = 0.0f;
+        out_rgba[1] = 0.0f;
+        out_rgba[2] = 0.0f;
+        out_rgba[3] = 0.0f;
+        return;
+    }
     const float age_norm = std::min(1.0f, static_cast<float>(age) / static_cast<float>(kMaxAge));
     const float conf = std::min(1.0f, confidence);
-    const float r = 0.2f + 0.8f * conf;
-    const float g = 0.4f + 0.6f * age_norm;
-    const float b = 1.0f - 0.5f * age_norm;
-    out_rgba[0] = r;
-    out_rgba[1] = g;
-    out_rgba[2] = b;
-    out_rgba[3] = 0.7f + 0.3f * conf;
+    if (has_metric_depth) {
+        const float r = 0.2f + 0.8f * conf;
+        const float g = 0.4f + 0.6f * age_norm;
+        const float b = 1.0f - 0.5f * age_norm;
+        out_rgba[0] = r;
+        out_rgba[1] = g;
+        out_rgba[2] = b;
+        out_rgba[3] = 0.7f + 0.3f * conf;
+    } else {
+        out_rgba[0] = 0.9f;
+        out_rgba[1] = 0.8f - 0.3f * age_norm;
+        out_rgba[2] = 0.2f + 0.2f * conf;
+        out_rgba[3] = 0.35f + 0.4f * conf;
+    }
 }
 
-void LandmarkMap::UpdateGLBuffer() {
+void LandmarkMap::UpdateGLBuffer(const float* world_from_camera) {
     if (point_count_ == 0) return;
+    if (!world_from_camera) return;
     for (int i = 0; i < point_count_; ++i) {
         Landmark& lm = landmarks_[i];
         Vertex& v = vertex_buffer_[i];
-        v.x = lm.x;
-        v.y = lm.y;
-        v.z = lm.z;
+        if (lm.has_metric_depth) {
+            v.x = lm.x;
+            v.y = lm.y;
+            v.z = lm.z;
+        } else {
+            const float depth = std::min(kFakeDepthBase + kFakeDepthGrowth * lm.age, kFakeDepthMax);
+            const float x_cam = lm.bearing[0] * depth;
+            const float y_cam = lm.bearing[1] * depth;
+            const float z_cam = lm.bearing[2] * depth;
+            v.x = world_from_camera[0] * x_cam +
+                  world_from_camera[4] * y_cam +
+                  world_from_camera[8] * z_cam +
+                  world_from_camera[12];
+            v.y = world_from_camera[1] * x_cam +
+                  world_from_camera[5] * y_cam +
+                  world_from_camera[9] * z_cam +
+                  world_from_camera[13];
+            v.z = world_from_camera[2] * x_cam +
+                  world_from_camera[6] * y_cam +
+                  world_from_camera[10] * z_cam +
+                  world_from_camera[14];
+        }
         float color[4];
-        BuildColor(lm.confidence, lm.age, color);
+        BuildColor(lm.confidence, lm.age, lm.has_metric_depth, color);
         v.r = color[0];
         v.g = color[1];
         v.b = color[2];
@@ -184,7 +327,7 @@ void LandmarkMap::UpdateGLBuffer() {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
-void LandmarkMap::Draw(const float* view_matrix, const float* projection_matrix) {
+void LandmarkMap::Draw(const float* view_matrix, const float* projection_matrix, const float* world_from_camera) {
     if (point_count_ == 0) return;
 
     float mvp[16];
@@ -198,7 +341,7 @@ void LandmarkMap::Draw(const float* view_matrix, const float* projection_matrix)
         }
     }
 
-    UpdateGLBuffer();
+    UpdateGLBuffer(world_from_camera);
     glUseProgram(program_);
     glUniformMatrix4fv(mvp_uniform_, 1, GL_FALSE, mvp);
     glBindVertexArray(vao_);

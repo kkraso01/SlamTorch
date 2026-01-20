@@ -169,6 +169,10 @@ void OpticalFlowTracker::DetectFeatures(const uint8_t* image) {
             for (int y = start_y; y < end_y; y += 2) {
                 for (int x = start_x; x < end_x; x += 2) {
                     const int idx = y * w + x;
+                    const uint8_t intensity = image[idx];
+                    if (intensity < 15 || intensity > 240) {
+                        continue;
+                    }
                     const float ix = 0.5f * (image[idx + 1] - image[idx - 1]);
                     const float iy = 0.5f * (image[idx + w] - image[idx - w]);
                     const float score = ix * ix + iy * iy;

@@ -2,6 +2,7 @@
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 #include <GLES3/gl3.h>
 #include <assert.h>
+#include <cmath>
 #include <time.h>
 #include "AndroidOut.h"
 
@@ -49,6 +50,7 @@ Renderer::Renderer(android_app *pApp) :
     for (int i = 0; i < 16; ++i) {
         last_good_view_[i] = (i % 5 == 0) ? 1.0f : 0.0f;
         last_good_proj_[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+        last_good_world_from_camera_[i] = (i % 5 == 0) ? 1.0f : 0.0f;
     }
     
     // Initialize FPS tracking
@@ -120,11 +122,14 @@ void Renderer::render() {
             // Get camera matrices for 3D rendering
             ar_slam_->GetViewMatrix(view_matrix_);
             ar_slam_->GetProjectionMatrix(0.1f, 100.0f, projection_matrix_);
+            float world_from_camera[16];
+            ar_slam_->GetWorldFromCameraMatrix(world_from_camera);
             
             // Save good matrices for frozen rendering when tracking is lost
             for (int i = 0; i < 16; ++i) {
                 last_good_view_[i] = view_matrix_[i];
                 last_good_proj_[i] = projection_matrix_[i];
+                last_good_world_from_camera_[i] = world_from_camera[i];
             }
             has_good_matrices_ = true;
             
@@ -189,14 +194,39 @@ void Renderer::render() {
 
                             const OpticalFlowTracker::Track* tracks = optical_flow_->GetTracks();
                             const int track_count = optical_flow_->GetTrackCount();
-                            float world_from_camera[16];
-                            ar_slam_->GetWorldFromCameraMatrix(world_from_camera);
+                            int stable_tracks = 0;
+                            float total_track_age = 0.0f;
+                            int depth_attempts = 0;
+                            int depth_hits = 0;
 
                             for (int i = 0; i < track_count; ++i) {
                                 const auto& track = tracks[i];
-                                if (!track.active || track.stable_count < 20) continue;
+                                if (!track.active) continue;
+                                total_track_age += static_cast<float>(track.age);
+
+                                if (track.stable_count < 20) continue;
                                 if (track.error > 5.0f) continue;
-                                if (!depth_ok || !depth_info.data) continue;
+
+                                stable_tracks++;
+
+                                const float bearing_x = (track.x - cx) / fx;
+                                const float bearing_y = (track.y - cy) / fy;
+                                float bearing_z = -1.0f;
+                                const float bearing_len = std::sqrt(
+                                    bearing_x * bearing_x +
+                                    bearing_y * bearing_y +
+                                    bearing_z * bearing_z);
+                                float bearing[3] = {
+                                    bearing_x / bearing_len,
+                                    bearing_y / bearing_len,
+                                    bearing_z / bearing_len
+                                };
+
+                                if (!depth_ok || !depth_info.data) {
+                                    const float confidence = 0.4f + 0.4f * (track.stable_count / 30.0f);
+                                    landmark_map_->AddBearingObservation(bearing, confidence);
+                                    continue;
+                                }
 
                                 const float depth_scale_x = static_cast<float>(depth_info.width) /
                                                             static_cast<float>(image_width);
@@ -212,7 +242,9 @@ void Renderer::render() {
                                                      depth_info.row_stride * py;
                                 const uint16_t* depth_pixel = reinterpret_cast<const uint16_t*>(row + depth_info.pixel_stride * px);
                                 const uint16_t depth_mm = *depth_pixel;
+                                depth_attempts++;
                                 if (depth_mm == 0) continue;
+                                depth_hits++;
 
                                 const float depth_m = static_cast<float>(depth_mm) * 0.001f;
                                 const float x_cam = (track.x - cx) * depth_m / fx;
@@ -234,8 +266,18 @@ void Renderer::render() {
                                                world_from_camera[14];
 
                                 const float confidence = 0.5f + 0.5f * (track.stable_count / 30.0f);
-                                landmark_map_->AddObservation(world_pos, confidence);
+                                landmark_map_->AddMetricObservation(world_pos, bearing, confidence);
                             }
+
+                            current_stable_track_count_ = stable_tracks;
+                            current_avg_track_age_ = track_count > 0
+                                ? (total_track_age / static_cast<float>(track_count))
+                                : 0.0f;
+                            current_depth_hit_rate_ = depth_attempts > 0
+                                ? (100.0f * static_cast<float>(depth_hits) / static_cast<float>(depth_attempts))
+                                : 0.0f;
+                            current_bearing_landmarks_ = landmark_map_->GetBearingCount();
+                            current_metric_landmarks_ = landmark_map_->GetMetricCount();
 
                             if (depth_image) {
                                 ar_slam_->ReleaseDepthImage(depth_image);
@@ -255,7 +297,7 @@ void Renderer::render() {
         if (landmark_map_ && landmark_map_->GetPointCount() > 0) {
             const float* view_to_use = has_good_matrices_ ? last_good_view_ : view_matrix_;
             const float* proj_to_use = has_good_matrices_ ? last_good_proj_ : projection_matrix_;
-            landmark_map_->Draw(view_to_use, proj_to_use);
+            landmark_map_->Draw(view_to_use, proj_to_use, last_good_world_from_camera_);
         }
     }
 
@@ -287,6 +329,12 @@ void Renderer::ClearPersistentMap() {
         optical_flow_->Reset();
     }
     has_good_matrices_ = false;
+    current_bearing_landmarks_ = 0;
+    current_metric_landmarks_ = 0;
+    current_feature_count_ = 0;
+    current_stable_track_count_ = 0;
+    current_avg_track_age_ = 0.0f;
+    current_depth_hit_rate_ = 0.0f;
 }
 
 void Renderer::CycleTorchMode() {
@@ -315,6 +363,12 @@ DebugStats Renderer::GetDebugStats() const {
     if (debug_hud_) {
         debug_hud_->Update(ar_slam_.get(), current_point_count_,
                            landmark_map_ ? landmark_map_->GetPointCount() : 0,
+                           current_bearing_landmarks_,
+                           current_metric_landmarks_,
+                           current_feature_count_,
+                           current_stable_track_count_,
+                           current_avg_track_age_,
+                           current_depth_hit_rate_,
                            last_fps_);
         const DebugHudData& data = debug_hud_->GetData();
         stats.tracking_state = data.tracking_state;
@@ -324,6 +378,12 @@ DebugStats Renderer::GetDebugStats() const {
         stats.last_failure_reason = data.last_failure_reason;
         stats.point_count = data.point_count;
         stats.map_points = data.map_points;
+        stats.bearing_landmarks = data.bearing_landmarks;
+        stats.metric_landmarks = data.metric_landmarks;
+        stats.tracked_features = data.tracked_features;
+        stats.stable_tracks = data.stable_tracks;
+        stats.avg_track_age = data.avg_track_age;
+        stats.depth_hit_rate = data.depth_hit_rate;
         stats.fps = data.fps;
     } else {
         stats.tracking_state = "NONE";
@@ -333,6 +393,12 @@ DebugStats Renderer::GetDebugStats() const {
         stats.last_failure_reason = "NONE";
         stats.point_count = 0;
         stats.map_points = 0;
+        stats.bearing_landmarks = 0;
+        stats.metric_landmarks = 0;
+        stats.tracked_features = 0;
+        stats.stable_tracks = 0;
+        stats.avg_track_age = 0.0f;
+        stats.depth_hit_rate = 0.0f;
         stats.fps = 0.0f;
     }
     return stats;
