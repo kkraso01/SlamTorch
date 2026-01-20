@@ -1,6 +1,7 @@
 #include "ArCoreSlam.h"
 #include "AndroidOut.h"
 #include <assert.h>
+#include <cstring>
 
 ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
     if (!activity) {
@@ -42,6 +43,7 @@ ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
     // Create reusable objects (zero per-frame allocation)
     ArPose_create(ar_session_, nullptr, &ar_pose_);
     ArLightEstimate_create(ar_session_, &ar_light_estimate_);
+    ArCameraIntrinsics_create(ar_session_, &ar_intrinsics_);
 
     ArConfig* ar_config = nullptr;
     ArConfig_create(ar_session_, &ar_config);
@@ -104,6 +106,9 @@ ArCoreSlam::~ArCoreSlam() {
     if (ar_light_estimate_) {
         ArLightEstimate_destroy(ar_light_estimate_);
     }
+    if (ar_intrinsics_) {
+        ArCameraIntrinsics_destroy(ar_intrinsics_);
+    }
     if (ar_camera_) {
         ArCamera_release(ar_camera_);
     }
@@ -161,23 +166,32 @@ void ArCoreSlam::Update(JNIEnv* env) {
     ArFrame_acquireCamera(ar_session_, ar_frame_, &ar_camera_);
     
     // Log camera intrinsics once (important for understanding tracking quality)
-    if (!camera_intrinsics_logged_ && ar_camera_) {
-        ArCameraIntrinsics* intrinsics = nullptr;
-        ArCameraIntrinsics_create(ar_session_, &intrinsics);
-        ArCamera_getImageIntrinsics(ar_session_, ar_camera_, intrinsics);
+    if (!camera_intrinsics_logged_ && ar_camera_ && ar_intrinsics_) {
+        ArCamera_getImageIntrinsics(ar_session_, ar_camera_, ar_intrinsics_);
         
         float fx, fy, cx, cy;
         int32_t width, height;
-        ArCameraIntrinsics_getFocalLength(ar_session_, intrinsics, &fx, &fy);
-        ArCameraIntrinsics_getPrincipalPoint(ar_session_, intrinsics, &cx, &cy);
-        ArCameraIntrinsics_getImageDimensions(ar_session_, intrinsics, &width, &height);
+        ArCameraIntrinsics_getFocalLength(ar_session_, ar_intrinsics_, &fx, &fy);
+        ArCameraIntrinsics_getPrincipalPoint(ar_session_, ar_intrinsics_, &cx, &cy);
+        ArCameraIntrinsics_getImageDimensions(ar_session_, ar_intrinsics_, &width, &height);
+
+        intrinsics_fx_ = fx;
+        intrinsics_fy_ = fy;
+        intrinsics_cx_ = cx;
+        intrinsics_cy_ = cy;
+        image_width_ = width;
+        image_height_ = height;
         
         __android_log_print(ANDROID_LOG_INFO, "SlamTorch",
             "Camera intrinsics: %dx%d, fx=%.1f, fy=%.1f, cx=%.1f, cy=%.1f",
             width, height, fx, fy, cx, cy);
         
-        ArCameraIntrinsics_destroy(intrinsics);
         camera_intrinsics_logged_ = true;
+    } else if (ar_camera_ && ar_intrinsics_) {
+        ArCamera_getImageIntrinsics(ar_session_, ar_camera_, ar_intrinsics_);
+        ArCameraIntrinsics_getFocalLength(ar_session_, ar_intrinsics_, &intrinsics_fx_, &intrinsics_fy_);
+        ArCameraIntrinsics_getPrincipalPoint(ar_session_, ar_intrinsics_, &intrinsics_cx_, &intrinsics_cy_);
+        ArCameraIntrinsics_getImageDimensions(ar_session_, ar_intrinsics_, &image_width_, &image_height_);
     }
     
     ArCamera_getTrackingState(ar_session_, ar_camera_, &tracking_state_);
@@ -196,12 +210,14 @@ void ArCoreSlam::Update(JNIEnv* env) {
             case AR_TRACKING_FAILURE_REASON_INSUFFICIENT_FEATURES: reason_str = "NO_FEATURES"; break;
             case AR_TRACKING_FAILURE_REASON_CAMERA_UNAVAILABLE: reason_str = "CAMERA_FAIL"; break;
         }
+        last_tracking_failure_reason_ = reason_str;
         __android_log_print(ANDROID_LOG_WARN, "SlamTorch", 
             "Tracking lost: state=%d, reason=%s (%d)", tracking_state_, reason_str, reason);
         last_logged_state = tracking_state_;
     } else if (tracking_state_ == AR_TRACKING_STATE_TRACKING && last_logged_state != AR_TRACKING_STATE_TRACKING) {
         __android_log_print(ANDROID_LOG_INFO, "SlamTorch", "Tracking acquired");
         last_logged_state = tracking_state_;
+        last_tracking_failure_reason_ = "NONE";
     }
 
     if (tracking_state_ == AR_TRACKING_STATE_TRACKING) {
@@ -230,13 +246,114 @@ void ArCoreSlam::Update(JNIEnv* env) {
             // Periodic exposure/light logging (every 3 seconds)
             static int light_log_counter = 0;
             if (light_log_counter++ % 180 == 0) {
+                float color_correction[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+                ArLightEstimate_getColorCorrection(ar_session_, ar_light_estimate_, color_correction);
                 __android_log_print(ANDROID_LOG_DEBUG, "SlamTorch",
-                    "Light intensity: %.3f (0.0=dark, 1.0=bright)", pixel_intensity);
+                    "Light intensity: %.3f, color_corr=[%.2f %.2f %.2f %.2f]",
+                    pixel_intensity,
+                    color_correction[0], color_correction[1],
+                    color_correction[2], color_correction[3]);
             }
             
             UpdateTorchLogic(env, pixel_intensity);
         }
     }
+}
+
+bool ArCoreSlam::AcquireCameraImageY(uint8_t* dst, int dst_stride, int dst_capacity,
+                                     int* out_width, int* out_height) {
+    if (!ar_session_ || !ar_frame_) return false;
+
+    ArImage* image = nullptr;
+    ArStatus status = ArFrame_acquireCameraImage(ar_session_, ar_frame_, &image);
+    if (status != AR_SUCCESS || !image) {
+        return false;
+    }
+
+    int32_t width = 0;
+    int32_t height = 0;
+    ArImage_getWidth(ar_session_, image, &width);
+    ArImage_getHeight(ar_session_, image, &height);
+
+    if (out_width) *out_width = width;
+    if (out_height) *out_height = height;
+
+    if (!dst || dst_capacity < (width * height) || dst_stride < width) {
+        ArImage_release(image);
+        return false;
+    }
+
+    const uint8_t* plane_data = nullptr;
+    int32_t data_length = 0;
+    int32_t row_stride = 0;
+    ArImage_getPlaneData(ar_session_, image, 0, &plane_data, &data_length);
+    ArImage_getPlaneRowStride(ar_session_, image, 0, &row_stride);
+
+    if (!plane_data || row_stride <= 0) {
+        ArImage_release(image);
+        return false;
+    }
+
+    const uint8_t* src = plane_data;
+    uint8_t* dst_row = dst;
+    for (int y = 0; y < height; ++y) {
+        memcpy(dst_row, src, static_cast<size_t>(width));
+        src += row_stride;
+        dst_row += dst_stride;
+    }
+
+    ArImage_release(image);
+    return true;
+}
+
+bool ArCoreSlam::AcquireDepthImage16(DepthImageInfo* out_info, ArImage** out_image) {
+    if (!ar_session_ || !ar_frame_ || !depth_enabled_) return false;
+    if (!out_info || !out_image) return false;
+
+    ArImage* depth_image = nullptr;
+    ArStatus status = ArFrame_acquireDepthImage16Bits(ar_session_, ar_frame_, &depth_image);
+    if (status != AR_SUCCESS || !depth_image) {
+        return false;
+    }
+
+    int32_t width = 0;
+    int32_t height = 0;
+    ArImage_getWidth(ar_session_, depth_image, &width);
+    ArImage_getHeight(ar_session_, depth_image, &height);
+
+    const uint8_t* plane_data = nullptr;
+    int32_t data_length = 0;
+    int32_t row_stride = 0;
+    int32_t pixel_stride = 0;
+    ArImage_getPlaneData(ar_session_, depth_image, 0, &plane_data, &data_length);
+    ArImage_getPlaneRowStride(ar_session_, depth_image, 0, &row_stride);
+    ArImage_getPlanePixelStride(ar_session_, depth_image, 0, &pixel_stride);
+
+    out_info->data = reinterpret_cast<const uint16_t*>(plane_data);
+    out_info->width = width;
+    out_info->height = height;
+    out_info->row_stride = row_stride;
+    out_info->pixel_stride = pixel_stride;
+    *out_image = depth_image;
+    return true;
+}
+
+void ArCoreSlam::ReleaseDepthImage(ArImage* image) {
+    if (image) {
+        ArImage_release(image);
+    }
+}
+
+void ArCoreSlam::GetImageDimensions(int* out_width, int* out_height) const {
+    if (out_width) *out_width = image_width_;
+    if (out_height) *out_height = image_height_;
+}
+
+void ArCoreSlam::GetCameraIntrinsics(float* out_fx, float* out_fy, float* out_cx, float* out_cy) const {
+    if (out_fx) *out_fx = intrinsics_fx_;
+    if (out_fy) *out_fy = intrinsics_fy_;
+    if (out_cx) *out_cx = intrinsics_cx_;
+    if (out_cy) *out_cy = intrinsics_cy_;
 }
 
 void ArCoreSlam::GetViewMatrix(float* out_matrix) const {

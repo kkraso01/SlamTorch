@@ -41,7 +41,9 @@ Renderer::Renderer(android_app *pApp) :
     point_cloud_renderer_ = std::make_unique<PointCloudRenderer>();
     point_cloud_renderer_->Initialize();
     
-    persistent_map_ = std::make_unique<PersistentPointMap>(500000);  // Production: 500k points
+    landmark_map_ = std::make_unique<LandmarkMap>(20000);
+    optical_flow_ = std::make_unique<OpticalFlowTracker>(800, 3);
+    debug_hud_ = std::make_unique<DebugHud>();
     
     // Initialize last-known matrices to identity
     for (int i = 0; i < 16; ++i) {
@@ -71,6 +73,7 @@ Renderer::~Renderer() {
     if (jni_attached_ && app_->activity->vm) {
         app_->activity->vm->DetachCurrentThread();
     }
+    delete[] camera_image_buffer_;
 }
 
 void Renderer::render() {
@@ -130,25 +133,13 @@ void Renderer::render() {
             if (point_cloud) {
                 ArPointCloud_getNumberOfPoints(ar_slam_->GetSession(), point_cloud, &num_points);
                 current_point_count_ = num_points;
-                
-                // Accumulate points into persistent map
-                if (num_points > 0) {
-                    const float* point_data = nullptr;
-                    ArPointCloud_getData(ar_slam_->GetSession(), point_cloud, &point_data);
-                    
-                    if (point_data) {
-                        float world_from_camera[16];
-                        ar_slam_->GetWorldFromCameraMatrix(world_from_camera);
-                        persistent_map_->AddPoints(world_from_camera, point_data, num_points);
-                    }
-                }
             }
             
             static int pc_log = 0;
             if (pc_log++ % 60 == 0) {
                 __android_log_print(ANDROID_LOG_INFO, "SlamTorch", 
-                    "Frame points=%d, Map total=%d (wrapped=%d)",
-                    num_points, persistent_map_->GetPointCount(), persistent_map_->IsBufferWrapped());
+                    "Frame points=%d, Landmark map=%d",
+                    num_points, landmark_map_ ? landmark_map_->GetPointCount() : 0);
             }
             
             // 3. Render ephemeral point cloud (current frame only)
@@ -158,6 +149,101 @@ void Renderer::render() {
                 view_matrix_,
                 projection_matrix_
             );
+
+            // 4. CPU image acquisition and optical flow tracking
+            int image_width = 0;
+            int image_height = 0;
+            ar_slam_->GetImageDimensions(&image_width, &image_height);
+            if (landmark_map_) {
+                landmark_map_->BeginFrame();
+            }
+
+            if (image_width > 0 && image_height > 0 && optical_flow_) {
+                const int required_capacity = image_width * image_height;
+                if (camera_image_capacity_ < required_capacity) {
+                    delete[] camera_image_buffer_;
+                    camera_image_buffer_ = new uint8_t[required_capacity];
+                    camera_image_capacity_ = required_capacity;
+                }
+                camera_image_stride_ = image_width;
+
+                if (camera_image_buffer_) {
+                    const bool got_image = ar_slam_->AcquireCameraImageY(
+                        camera_image_buffer_,
+                        camera_image_stride_,
+                        camera_image_capacity_,
+                        &image_width,
+                        &image_height);
+
+                    if (got_image) {
+                        optical_flow_->Update(camera_image_buffer_, image_width, image_height);
+                        current_feature_count_ = optical_flow_->GetTrackCount();
+
+                        if (landmark_map_) {
+                            float fx = 0.0f, fy = 0.0f, cx = 0.0f, cy = 0.0f;
+                            ar_slam_->GetCameraIntrinsics(&fx, &fy, &cx, &cy);
+
+                            ArCoreSlam::DepthImageInfo depth_info;
+                            ArImage* depth_image = nullptr;
+                            const bool depth_ok = ar_slam_->AcquireDepthImage16(&depth_info, &depth_image);
+
+                            const OpticalFlowTracker::Track* tracks = optical_flow_->GetTracks();
+                            const int track_count = optical_flow_->GetTrackCount();
+                            float world_from_camera[16];
+                            ar_slam_->GetWorldFromCameraMatrix(world_from_camera);
+
+                            for (int i = 0; i < track_count; ++i) {
+                                const auto& track = tracks[i];
+                                if (!track.active || track.stable_count < 20) continue;
+                                if (track.error > 5.0f) continue;
+                                if (!depth_ok || !depth_info.data) continue;
+
+                                const float depth_scale_x = static_cast<float>(depth_info.width) /
+                                                            static_cast<float>(image_width);
+                                const float depth_scale_y = static_cast<float>(depth_info.height) /
+                                                            static_cast<float>(image_height);
+                                const int px = static_cast<int>(track.x * depth_scale_x);
+                                const int py = static_cast<int>(track.y * depth_scale_y);
+                                if (px < 0 || py < 0 || px >= depth_info.width || py >= depth_info.height) {
+                                    continue;
+                                }
+
+                                const uint8_t* row = reinterpret_cast<const uint8_t*>(depth_info.data) +
+                                                     depth_info.row_stride * py;
+                                const uint16_t* depth_pixel = reinterpret_cast<const uint16_t*>(row + depth_info.pixel_stride * px);
+                                const uint16_t depth_mm = *depth_pixel;
+                                if (depth_mm == 0) continue;
+
+                                const float depth_m = static_cast<float>(depth_mm) * 0.001f;
+                                const float x_cam = (track.x - cx) * depth_m / fx;
+                                const float y_cam = (track.y - cy) * depth_m / fy;
+                                const float z_cam = -depth_m;
+
+                                float world_pos[3];
+                                world_pos[0] = world_from_camera[0] * x_cam +
+                                               world_from_camera[4] * y_cam +
+                                               world_from_camera[8] * z_cam +
+                                               world_from_camera[12];
+                                world_pos[1] = world_from_camera[1] * x_cam +
+                                               world_from_camera[5] * y_cam +
+                                               world_from_camera[9] * z_cam +
+                                               world_from_camera[13];
+                                world_pos[2] = world_from_camera[2] * x_cam +
+                                               world_from_camera[6] * y_cam +
+                                               world_from_camera[10] * z_cam +
+                                               world_from_camera[14];
+
+                                const float confidence = 0.5f + 0.5f * (track.stable_count / 30.0f);
+                                landmark_map_->AddObservation(world_pos, confidence);
+                            }
+
+                            if (depth_image) {
+                                ar_slam_->ReleaseDepthImage(depth_image);
+                            }
+                        }
+                    }
+                }
+            }
         } else {
             static int warn_log = 0;
             if (warn_log++ % 180 == 0) {
@@ -166,10 +252,10 @@ void Renderer::render() {
         }
         
         // 4. ALWAYS render persistent map (even when not tracking, using last good matrices)
-        if (persistent_map_ && persistent_map_->GetPointCount() > 0) {
+        if (landmark_map_ && landmark_map_->GetPointCount() > 0) {
             const float* view_to_use = has_good_matrices_ ? last_good_view_ : view_matrix_;
             const float* proj_to_use = has_good_matrices_ ? last_good_proj_ : projection_matrix_;
-            persistent_map_->Draw(view_to_use, proj_to_use);
+            landmark_map_->Draw(view_to_use, proj_to_use);
         }
     }
 
@@ -194,10 +280,13 @@ void Renderer::UpdateRotation(int display_rotation) {
 }
 
 void Renderer::ClearPersistentMap() {
-    if (persistent_map_) {
-        persistent_map_->Clear();
-        has_good_matrices_ = false;
+    if (landmark_map_) {
+        landmark_map_->Clear();
     }
+    if (optical_flow_) {
+        optical_flow_->Reset();
+    }
+    has_good_matrices_ = false;
 }
 
 void Renderer::CycleTorchMode() {
@@ -223,28 +312,29 @@ void Renderer::SetTorchMode(ArCoreSlam::TorchMode mode) {
 
 DebugStats Renderer::GetDebugStats() const {
     DebugStats stats;
-    stats.tracking_state = "NONE";
-    stats.torch_mode = "NONE";
-    stats.torch_enabled = false;
-    stats.depth_enabled = false;
-    
-    if (ar_slam_) {
-        ArTrackingState state = ar_slam_->GetTrackingState();
-        stats.tracking_state = (state == AR_TRACKING_STATE_TRACKING) ? "TRACKING" :
-                               (state == AR_TRACKING_STATE_PAUSED) ? "PAUSED" : "STOPPED";
-        
-        auto mode = ar_slam_->GetTorchMode();
-        stats.torch_mode = (mode == ArCoreSlam::TorchMode::AUTO) ? "AUTO" :
-                           (mode == ArCoreSlam::TorchMode::MANUAL_ON) ? "ON" : "OFF";
-        stats.torch_enabled = ar_slam_->IsTorchOn();
-        
-        stats.depth_enabled = ar_slam_->IsDepthEnabled();
+    if (debug_hud_) {
+        debug_hud_->Update(ar_slam_.get(), current_point_count_,
+                           landmark_map_ ? landmark_map_->GetPointCount() : 0,
+                           last_fps_);
+        const DebugHudData& data = debug_hud_->GetData();
+        stats.tracking_state = data.tracking_state;
+        stats.torch_mode = data.torch_mode;
+        stats.torch_enabled = data.torch_enabled;
+        stats.depth_enabled = data.depth_enabled;
+        stats.last_failure_reason = data.last_failure_reason;
+        stats.point_count = data.point_count;
+        stats.map_points = data.map_points;
+        stats.fps = data.fps;
+    } else {
+        stats.tracking_state = "NONE";
+        stats.torch_mode = "NONE";
+        stats.torch_enabled = false;
+        stats.depth_enabled = false;
+        stats.last_failure_reason = "NONE";
+        stats.point_count = 0;
+        stats.map_points = 0;
+        stats.fps = 0.0f;
     }
-    
-    stats.point_count = current_point_count_;
-    stats.map_points = persistent_map_ ? persistent_map_->GetPointCount() : 0;
-    stats.fps = last_fps_;
-    
     return stats;
 }
 
@@ -292,8 +382,8 @@ void Renderer::handleInput() {
         auto &keyEvent = inputBuffer->keyEvents[i];
         if (keyEvent.action == AKEY_EVENT_ACTION_DOWN) {
             // Volume Down (Keycode 25) - Clear persistent map
-            if (keyEvent.keyCode == 25 && persistent_map_) {
-                persistent_map_->Clear();
+            if (keyEvent.keyCode == 25 && landmark_map_) {
+                landmark_map_->Clear();
                 has_good_matrices_ = false;
                 __android_log_print(ANDROID_LOG_INFO, "SlamTorch", "User cleared persistent map");
             }

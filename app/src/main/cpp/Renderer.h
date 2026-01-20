@@ -3,12 +3,15 @@
 
 #include <EGL/egl.h>
 #include <memory>
+#include <cstdint>
 #include <jni.h>
 
 #include "ArCoreSlam.h"
 #include "BackgroundRenderer.h"
+#include "DebugHud.h"
+#include "LandmarkMap.h"
+#include "OpticalFlowTracker.h"
 #include "PointCloudRenderer.h"
-#include "PersistentPointMap.h"
 
 struct android_app;
 
@@ -21,6 +24,7 @@ struct DebugStats {
     const char* torch_mode;
     bool torch_enabled;
     bool depth_enabled;
+    const char* last_failure_reason;
 };
 
 class Renderer {
@@ -60,7 +64,9 @@ private:
     std::unique_ptr<ArCoreSlam> ar_slam_;
     std::unique_ptr<BackgroundRenderer> background_renderer_;
     std::unique_ptr<PointCloudRenderer> point_cloud_renderer_;
-    std::unique_ptr<PersistentPointMap> persistent_map_;
+    std::unique_ptr<LandmarkMap> landmark_map_;
+    std::unique_ptr<OpticalFlowTracker> optical_flow_;
+    std::unique_ptr<DebugHud> debug_hud_;
     
     // JNI cached (attach once, not per-frame)
     JNIEnv* env_ = nullptr;
@@ -83,6 +89,12 @@ private:
     
     // Stats tracking
     int current_point_count_ = 0;
+    int current_feature_count_ = 0;
+
+    // CPU image buffer (Y plane)
+    uint8_t* camera_image_buffer_ = nullptr;
+    int camera_image_capacity_ = 0;
+    int camera_image_stride_ = 0;
 };
 
 #endif //ANDROIDGLINVESTIGATIONS_RENDERER_H

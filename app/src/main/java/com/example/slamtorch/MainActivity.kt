@@ -53,7 +53,8 @@ class MainActivity : GameActivity() {
         val fps: Float,
         val torchMode: String,
         val torchEnabled: Boolean,
-        val depthEnabled: Boolean
+        val depthEnabled: Boolean,
+        val lastFailureReason: String
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -141,6 +142,7 @@ class MainActivity : GameActivity() {
                         }
                         debugOverlay.text = """
                             Track: ${stats.trackingState}
+                            Fail: ${stats.lastFailureReason}
                             Points: ${stats.pointCount}
                             Map: ${stats.mapPoints}
                             FPS: ${"%.1f".format(stats.fps)}

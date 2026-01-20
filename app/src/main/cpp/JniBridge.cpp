@@ -60,7 +60,7 @@ Java_com_example_slamtorch_MainActivity_nativeGetDebugStats(JNIEnv* env, jobject
     }
     if (!constructor) {
         constructor = env->GetMethodID(statsClass, "<init>",
-            "(Ljava/lang/String;IIFLjava/lang/String;ZZ)V");
+            "(Ljava/lang/String;IIFLjava/lang/String;ZZLjava/lang/String;)V");
         if (!constructor) {
             __android_log_print(ANDROID_LOG_ERROR, "SlamTorch", "Failed to find DebugStats constructor");
             return nullptr;
@@ -70,14 +70,16 @@ Java_com_example_slamtorch_MainActivity_nativeGetDebugStats(JNIEnv* env, jobject
     // Create Java strings
     jstring trackingState = env->NewStringUTF(stats.tracking_state);
     jstring torchMode = env->NewStringUTF(stats.torch_mode);
+    jstring failureReason = env->NewStringUTF(stats.last_failure_reason);
     
     // Create DebugStats object
     jobject result = env->NewObject(statsClass, constructor,
         trackingState, stats.point_count, stats.map_points, stats.fps,
-        torchMode, stats.torch_enabled, stats.depth_enabled);
+        torchMode, stats.torch_enabled, stats.depth_enabled, failureReason);
     
     env->DeleteLocalRef(trackingState);
     env->DeleteLocalRef(torchMode);
+    env->DeleteLocalRef(failureReason);
     return result;
 }
 
