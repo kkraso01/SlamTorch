@@ -3,7 +3,6 @@
 
 #include <GLES3/gl3.h>
 #include <cstdint>
-#include <unordered_set>
 
 // Zero-allocation persistent point map for ARCore SLAM visualization
 class PersistentPointMap {
@@ -32,7 +31,6 @@ private:
     static constexpr int MAX_POINTS = 500000;  // Production-grade: 500k points
     static constexpr float MAX_DISTANCE = 10.0f;  // Extended range
     static constexpr int DECIMATION = 2;  // Keep 1/2 of input points
-    static constexpr float VOXEL_SIZE = 0.02f;  // 2cm voxel for high density
 
     // Fixed-size ring buffer
     float* point_buffer_ = nullptr;  // 3 floats per point (xyz)
@@ -40,20 +38,6 @@ private:
     int write_index_ = 0;
     int total_added_ = 0;
     bool has_wrapped_ = false;
-
-    // Spatial deduplication (simple voxel hash)
-    struct VoxelKey {
-        int16_t x, y, z;
-        bool operator==(const VoxelKey& other) const {
-            return x == other.x && y == other.y && z == other.z;
-        }
-    };
-    struct VoxelHash {
-        size_t operator()(const VoxelKey& k) const {
-            return ((size_t)k.x << 32) | ((size_t)k.y << 16) | (size_t)k.z;
-        }
-    };
-    std::unordered_set<VoxelKey, VoxelHash> voxel_set_;
 
     // OpenGL resources
     GLuint vbo_ = 0;
@@ -68,7 +52,6 @@ private:
     // Helper functions
     void InitGL();
     void CleanupGL();
-    VoxelKey GetVoxelKey(float x, float y, float z) const;
     bool ShouldAddPoint(float x, float y, float z) const;
     void TransformPoint(const float* mat, float x, float y, float z, float* out) const;
     void UpdateGLBuffer();

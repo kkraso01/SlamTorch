@@ -3,7 +3,6 @@
 
 #include <EGL/egl.h>
 #include <memory>
-#include <string>
 #include <jni.h>
 
 #include "ArCoreSlam.h"
@@ -15,11 +14,12 @@ struct android_app;
 
 // Debug statistics structure
 struct DebugStats {
-    std::string tracking_state;
+    const char* tracking_state;
     int point_count;
     int map_points;
     float fps;
-    std::string torch_mode;
+    const char* torch_mode;
+    bool torch_enabled;
     bool depth_enabled;
 };
 
@@ -36,9 +36,10 @@ public:
     void OnResume();
     
     // UI integration
-    void UpdateRotation(int rotation_degrees);
+    void UpdateRotation(int display_rotation);
     void ClearPersistentMap();
     void CycleTorchMode();
+    void SetTorchMode(ArCoreSlam::TorchMode mode);
     DebugStats GetDebugStats() const;
 
 private:

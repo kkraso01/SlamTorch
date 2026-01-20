@@ -8,6 +8,7 @@ ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
         ar_session_ = nullptr;
         activity_obj_ = nullptr;
         set_torch_method_ = nullptr;
+        is_torch_available_method_ = nullptr;
         return;
     }
     
@@ -16,11 +17,16 @@ ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
         aout << "Failed to create global reference for activity" << std::endl;
         ar_session_ = nullptr;
         set_torch_method_ = nullptr;
+        is_torch_available_method_ = nullptr;
         return;
     }
+
+    env->GetJavaVM(&java_vm_);
     
     jclass clazz = env->GetObjectClass(activity_obj_);
     set_torch_method_ = env->GetMethodID(clazz, "setTorchEnabled", "(Z)V");
+    is_torch_available_method_ = env->GetMethodID(clazz, "isTorchAvailable", "()Z");
+    env->DeleteLocalRef(clazz);
 
     ArStatus status = ArSession_create(env, activity, &ar_session_);
     if (status != AR_SUCCESS) {
@@ -40,15 +46,20 @@ ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
     ArConfig* ar_config = nullptr;
     ArConfig_create(ar_session_, &ar_config);
     
-    // BLOCKING mode: Better tracking stability (waits for frame, reduces drift)
-    // LATEST_CAMERA_IMAGE: Lower latency but can skip frames (less stable)
-    ArConfig_setUpdateMode(ar_session_, ar_config, AR_UPDATE_MODE_BLOCKING);
+    // LATEST_CAMERA_IMAGE keeps rendering responsive and avoids blocking the render loop.
+    ArConfig_setUpdateMode(ar_session_, ar_config, AR_UPDATE_MODE_LATEST_CAMERA_IMAGE);
     
     // AUTO focus: Essential for tracking varied distances
     ArConfig_setFocusMode(ar_session_, ar_config, AR_FOCUS_MODE_AUTO);
     
     // Enable depth if supported (improves occlusion and tracking robustness)
-    ArConfig_setDepthMode(ar_session_, ar_config, AR_DEPTH_MODE_AUTOMATIC);
+    ArBool depth_supported = AR_FALSE;
+    ArSession_isDepthModeSupported(ar_session_, AR_DEPTH_MODE_AUTOMATIC, &depth_supported);
+    if (depth_supported == AR_TRUE) {
+        ArConfig_setDepthMode(ar_session_, ar_config, AR_DEPTH_MODE_AUTOMATIC);
+    } else {
+        ArConfig_setDepthMode(ar_session_, ar_config, AR_DEPTH_MODE_DISABLED);
+    }
     
     // Enable light estimation for better feature matching
     ArConfig_setLightEstimationMode(ar_session_, ar_config, AR_LIGHT_ESTIMATION_MODE_AMBIENT_INTENSITY);
@@ -67,13 +78,26 @@ ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
         ArConfig_destroy(current_config);
         
         __android_log_print(ANDROID_LOG_INFO, "SlamTorch", 
-            "ARCore configured: update=BLOCKING, focus=AUTO, depth=%s, light_est=AMBIENT",
+            "ARCore configured: update=LATEST, focus=AUTO, depth=%s, light_est=AMBIENT",
             depth_enabled_ ? "ENABLED" : "DISABLED");
     }
     ArConfig_destroy(ar_config);
+
+    if (is_torch_available_method_) {
+        torch_available_ = env->CallBooleanMethod(activity_obj_, is_torch_available_method_);
+        __android_log_print(ANDROID_LOG_INFO, "SlamTorch", "Torch availability: %s", torch_available_ ? "YES" : "NO");
+    }
 }
 
 ArCoreSlam::~ArCoreSlam() {
+    if (activity_obj_) {
+        JNIEnv* env = nullptr;
+        if (java_vm_ && java_vm_->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) {
+            env->DeleteGlobalRef(activity_obj_);
+        }
+        activity_obj_ = nullptr;
+    }
+
     if (ar_pose_) {
         ArPose_destroy(ar_pose_);
     }
@@ -112,11 +136,7 @@ void ArCoreSlam::OnPause() {
 }
 
 void ArCoreSlam::OnSurfaceChanged(int rotation, int width, int height) {
-    if (ar_session_) {
-        display_rotation_ = rotation;
-        ArSession_setDisplayGeometry(ar_session_, rotation, width, height);
-        __android_log_print(ANDROID_LOG_INFO, "SlamTorch", "Display geometry set: rot=%d, %dx%d", rotation, width, height);
-    }
+    UpdateDisplayGeometry(rotation, width, height);
 }
 
 void ArCoreSlam::Update(JNIEnv* env) {
@@ -256,7 +276,12 @@ void ArCoreSlam::GetWorldFromCameraMatrix(float* out_matrix) const {
 }
 
 void ArCoreSlam::UpdateTorchLogic(JNIEnv* env, float light_intensity) {
+    if (!torch_available_) {
+        return;
+    }
+
     bool target_state = current_torch_state_;
+    int required_frames = 1;
 
     if (torch_mode_ == TorchMode::MANUAL_ON) {
         target_state = true;
@@ -272,16 +297,42 @@ void ArCoreSlam::UpdateTorchLogic(JNIEnv* env, float light_intensity) {
         } else if (light_intensity > 0.4f) {
             target_state = false;
         }
+        required_frames = 15;
     }
 
     if (target_state != current_torch_state_) {
-        current_torch_state_ = target_state;
-        CallJavaSetTorch(env, current_torch_state_);
+        if (pending_torch_state_ != target_state) {
+            pending_torch_state_ = target_state;
+            torch_pending_frames_ = 0;
+        }
+        torch_pending_frames_++;
+        if (torch_pending_frames_ >= required_frames) {
+            current_torch_state_ = target_state;
+            torch_pending_frames_ = 0;
+            CallJavaSetTorch(env, current_torch_state_);
+        }
+    } else {
+        torch_pending_frames_ = 0;
+        pending_torch_state_ = current_torch_state_;
     }
 }
 
 void ArCoreSlam::CallJavaSetTorch(JNIEnv* env, bool enabled) {
-    if (env && activity_obj_ && set_torch_method_) {
+    if (env && activity_obj_ && set_torch_method_ && torch_available_) {
         env->CallVoidMethod(activity_obj_, set_torch_method_, (jboolean)enabled);
+    }
+}
+
+void ArCoreSlam::UpdateDisplayGeometry(int rotation, int width, int height) {
+    if (!ar_session_ || width <= 0 || height <= 0) {
+        return;
+    }
+
+    if (rotation != display_rotation_ || width != ar_frame_width_ || height != ar_frame_height_) {
+        display_rotation_ = rotation;
+        ar_frame_width_ = width;
+        ar_frame_height_ = height;
+        ArSession_setDisplayGeometry(ar_session_, rotation, width, height);
+        __android_log_print(ANDROID_LOG_INFO, "SlamTorch", "Display geometry set: rot=%d, %dx%d", rotation, width, height);
     }
 }
