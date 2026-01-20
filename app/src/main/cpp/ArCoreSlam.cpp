@@ -50,23 +50,36 @@ ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
     
     // LATEST_CAMERA_IMAGE keeps rendering responsive and avoids blocking the render loop.
     ArConfig_setUpdateMode(ar_session_, ar_config, AR_UPDATE_MODE_LATEST_CAMERA_IMAGE);
-    
-    // AUTO focus: Essential for tracking varied distances
+
+    // AUTO focus: Essential for tracking varied distances (fallback to FIXED if unsupported).
     ArConfig_setFocusMode(ar_session_, ar_config, AR_FOCUS_MODE_AUTO);
-    
+
     // Enable depth if supported (improves occlusion and tracking robustness)
     int32_t depth_supported = 0;
     ArSession_isDepthModeSupported(ar_session_, AR_DEPTH_MODE_AUTOMATIC, &depth_supported);
-    if (depth_supported != 0) {
+    depth_supported_ = (depth_supported != 0);
+    if (depth_supported_) {
         ArConfig_setDepthMode(ar_session_, ar_config, AR_DEPTH_MODE_AUTOMATIC);
     } else {
         ArConfig_setDepthMode(ar_session_, ar_config, AR_DEPTH_MODE_DISABLED);
+        __android_log_print(ANDROID_LOG_WARN, "SlamTorch", "Depth unsupported on this device/camera");
     }
     
     // Enable light estimation for better feature matching
     ArConfig_setLightEstimationMode(ar_session_, ar_config, AR_LIGHT_ESTIMATION_MODE_AMBIENT_INTENSITY);
+
+    // Enable EIS if supported for more stable camera feed.
+    int32_t eis_supported = 0;
+    ArSession_isImageStabilizationModeSupported(ar_session_, AR_IMAGE_STABILIZATION_MODE_EIS, &eis_supported);
+    if (eis_supported != 0) {
+        ArConfig_setImageStabilizationMode(ar_session_, ar_config, AR_IMAGE_STABILIZATION_MODE_EIS);
+    }
     
     status = ArSession_configure(ar_session_, ar_config);
+    if (status == AR_ERROR_UNSUPPORTED_CONFIGURATION) {
+        ArConfig_setFocusMode(ar_session_, ar_config, AR_FOCUS_MODE_FIXED);
+        status = ArSession_configure(ar_session_, ar_config);
+    }
     if (status != AR_SUCCESS) {
         __android_log_print(ANDROID_LOG_ERROR, "SlamTorch", "ArSession_configure FAILED: %d", status);
     } else {
@@ -79,9 +92,13 @@ ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
         depth_enabled_ = (depth_mode != AR_DEPTH_MODE_DISABLED);
         ArConfig_destroy(current_config);
         
-        __android_log_print(ANDROID_LOG_INFO, "SlamTorch", 
-            "ARCore configured: update=LATEST, focus=AUTO, depth=%s, light_est=AMBIENT",
-            depth_enabled_ ? "ENABLED" : "DISABLED");
+        ArFocusMode focus_mode;
+        ArConfig_getFocusMode(ar_session_, current_config, &focus_mode);
+        __android_log_print(ANDROID_LOG_INFO, "SlamTorch",
+            "ARCore configured: update=LATEST, focus=%s, depth=%s, light_est=AMBIENT, eis=%s",
+            focus_mode == AR_FOCUS_MODE_AUTO ? "AUTO" : "FIXED",
+            depth_enabled_ ? "ENABLED" : "DISABLED",
+            eis_supported != 0 ? "ON" : "OFF");
     }
     ArConfig_destroy(ar_config);
 
@@ -306,20 +323,32 @@ bool ArCoreSlam::AcquireCameraImageY(uint8_t* dst, int dst_stride, int dst_capac
     return true;
 }
 
-bool ArCoreSlam::AcquireDepthImage16(DepthImageInfo* out_info, ArImage** out_image) {
+bool ArCoreSlam::AcquireDepthFrame(DepthSource source, DepthFrame* out_frame,
+                                   ArImage** out_depth_image, ArImage** out_confidence_image) {
     if (!ar_session_ || !ar_frame_ || !depth_enabled_) return false;
-    if (!out_info || !out_image) return false;
+    if (source == DepthSource::OFF) return false;
+    if (!out_frame || !out_depth_image || !out_confidence_image) return false;
+
+    *out_depth_image = nullptr;
+    *out_confidence_image = nullptr;
+    *out_frame = DepthFrame{};
 
     ArImage* depth_image = nullptr;
-    ArStatus status = ArFrame_acquireDepthImage16Bits(ar_session_, ar_frame_, &depth_image);
+    ArStatus status = (source == DepthSource::RAW)
+        ? ArFrame_acquireRawDepthImage16Bits(ar_session_, ar_frame_, &depth_image)
+        : ArFrame_acquireDepthImage16Bits(ar_session_, ar_frame_, &depth_image);
     if (status != AR_SUCCESS || !depth_image) {
         return false;
     }
 
     int32_t width = 0;
     int32_t height = 0;
+    int32_t format = 0;
+    int64_t timestamp = 0;
     ArImage_getWidth(ar_session_, depth_image, &width);
     ArImage_getHeight(ar_session_, depth_image, &height);
+    ArImage_getFormat(ar_session_, depth_image, &format);
+    ArImage_getTimestamp(ar_session_, depth_image, &timestamp);
 
     const uint8_t* plane_data = nullptr;
     int32_t data_length = 0;
@@ -329,12 +358,38 @@ bool ArCoreSlam::AcquireDepthImage16(DepthImageInfo* out_info, ArImage** out_ima
     ArImage_getPlaneRowStride(ar_session_, depth_image, 0, &row_stride);
     ArImage_getPlanePixelStride(ar_session_, depth_image, 0, &pixel_stride);
 
-    out_info->data = reinterpret_cast<const uint16_t*>(plane_data);
-    out_info->width = width;
-    out_info->height = height;
-    out_info->row_stride = row_stride;
-    out_info->pixel_stride = pixel_stride;
-    *out_image = depth_image;
+    out_frame->depth_data = reinterpret_cast<const uint16_t*>(plane_data);
+    out_frame->width = width;
+    out_frame->height = height;
+    out_frame->row_stride = row_stride;
+    out_frame->pixel_stride = pixel_stride;
+    out_frame->format = format;
+    out_frame->timestamp_ns = timestamp;
+    out_frame->is_raw = (source == DepthSource::RAW);
+    *out_depth_image = depth_image;
+
+    if (source == DepthSource::RAW) {
+        ArImage* confidence_image = nullptr;
+        ArStatus conf_status = ArFrame_acquireRawDepthConfidenceImage(ar_session_, ar_frame_, &confidence_image);
+        if (conf_status == AR_SUCCESS && confidence_image) {
+            int32_t conf_format = 0;
+            ArImage_getFormat(ar_session_, confidence_image, &conf_format);
+            const uint8_t* conf_plane_data = nullptr;
+            int32_t conf_length = 0;
+            int32_t conf_row_stride = 0;
+            int32_t conf_pixel_stride = 0;
+            ArImage_getPlaneData(ar_session_, confidence_image, 0, &conf_plane_data, &conf_length);
+            ArImage_getPlaneRowStride(ar_session_, confidence_image, 0, &conf_row_stride);
+            ArImage_getPlanePixelStride(ar_session_, confidence_image, 0, &conf_pixel_stride);
+
+            out_frame->confidence_data = conf_plane_data;
+            out_frame->confidence_row_stride = conf_row_stride;
+            out_frame->confidence_pixel_stride = conf_pixel_stride;
+            out_frame->confidence_format = conf_format;
+            *out_confidence_image = confidence_image;
+        }
+    }
+
     return true;
 }
 

@@ -5,13 +5,17 @@
 #include <memory>
 #include <cstdint>
 #include <jni.h>
+#include <vector>
 
 #include "ArCoreSlam.h"
 #include "BackgroundRenderer.h"
 #include "DebugHud.h"
+#include "DepthMapper.h"
+#include "DepthOverlayRenderer.h"
 #include "LandmarkMap.h"
 #include "OpticalFlowTracker.h"
 #include "PointCloudRenderer.h"
+#include "VoxelMapRenderer.h"
 
 struct android_app;
 
@@ -30,6 +34,16 @@ struct DebugStats {
     const char* torch_mode;
     bool torch_enabled;
     bool depth_enabled;
+    bool depth_supported;
+    const char* depth_mode;
+    int depth_width;
+    int depth_height;
+    float depth_min_m;
+    float depth_max_m;
+    int voxels_used;
+    int points_fused_per_second;
+    bool map_enabled;
+    bool depth_overlay_enabled;
     const char* last_failure_reason;
 };
 
@@ -50,6 +64,9 @@ public:
     void ClearPersistentMap();
     void CycleTorchMode();
     void SetTorchMode(ArCoreSlam::TorchMode mode);
+    void SetDepthMode(ArCoreSlam::DepthSource mode);
+    void SetMapEnabled(bool enabled);
+    void SetDebugOverlayEnabled(bool enabled);
     DebugStats GetDebugStats() const;
 
 private:
@@ -69,10 +86,13 @@ private:
     // ARCore SLAM and Rendering
     std::unique_ptr<ArCoreSlam> ar_slam_;
     std::unique_ptr<BackgroundRenderer> background_renderer_;
+    std::unique_ptr<DepthOverlayRenderer> depth_overlay_renderer_;
     std::unique_ptr<PointCloudRenderer> point_cloud_renderer_;
     std::unique_ptr<LandmarkMap> landmark_map_;
     std::unique_ptr<OpticalFlowTracker> optical_flow_;
     std::unique_ptr<DebugHud> debug_hud_;
+    std::unique_ptr<DepthMapper> depth_mapper_;
+    std::unique_ptr<VoxelMapRenderer> voxel_map_renderer_;
     
     // JNI cached (attach once, not per-frame)
     JNIEnv* env_ = nullptr;
@@ -102,11 +122,25 @@ private:
     float current_depth_hit_rate_ = 0.0f;
     int current_bearing_landmarks_ = 0;
     int current_metric_landmarks_ = 0;
+    int current_depth_width_ = 0;
+    int current_depth_height_ = 0;
+    float current_depth_min_m_ = 0.0f;
+    float current_depth_max_m_ = 0.0f;
+    int current_voxels_used_ = 0;
+    int current_points_fused_per_second_ = 0;
+    int points_fused_accumulator_ = 0;
+    double points_fused_last_time_ = 0.0;
+    bool map_enabled_ = true;
+    bool debug_overlay_enabled_ = false;
+    ArCoreSlam::DepthSource depth_source_ = ArCoreSlam::DepthSource::DEPTH;
 
     // CPU image buffer (Y plane)
     uint8_t* camera_image_buffer_ = nullptr;
     int camera_image_capacity_ = 0;
     int camera_image_stride_ = 0;
+
+    // Depth debug buffer (grayscale)
+    std::vector<uint8_t> depth_debug_buffer_;
 };
 
 #endif //ANDROIDGLINVESTIGATIONS_RENDERER_H

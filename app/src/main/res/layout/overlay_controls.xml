@@ -63,6 +63,42 @@
                 app:cornerRadius="18dp" />
         </com.google.android.material.button.MaterialButtonToggleGroup>
 
+        <com.google.android.material.button.MaterialButtonToggleGroup
+            android:id="@+id/depthToggleGroup"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            app:singleSelection="true"
+            app:selectionRequired="true">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/depthOffButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="Depth OFF"
+                android:textAllCaps="false"
+                app:cornerRadius="18dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/depthDepthButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="Depth"
+                android:textAllCaps="false"
+                app:cornerRadius="18dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/depthRawButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="Raw"
+                android:textAllCaps="false"
+                app:cornerRadius="18dp" />
+        </com.google.android.material.button.MaterialButtonToggleGroup>
+
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -87,6 +123,17 @@
                 android:layout_marginStart="8dp"
                 android:text="Clear"
                 android:textAllCaps="false"
+                app:cornerRadius="18dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/mapToggleButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:text="Map ON"
+                android:textAllCaps="false"
+                android:checkable="true"
                 app:cornerRadius="18dp" />
         </LinearLayout>
     </LinearLayout>
