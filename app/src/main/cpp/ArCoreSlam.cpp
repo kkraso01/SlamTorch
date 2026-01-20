@@ -53,9 +53,9 @@ ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
     ArConfig_setFocusMode(ar_session_, ar_config, AR_FOCUS_MODE_AUTO);
     
     // Enable depth if supported (improves occlusion and tracking robustness)
-    ArBool depth_supported = AR_FALSE;
+    int32_t depth_supported = 0;
     ArSession_isDepthModeSupported(ar_session_, AR_DEPTH_MODE_AUTOMATIC, &depth_supported);
-    if (depth_supported == AR_TRUE) {
+    if (depth_supported != 0) {
         ArConfig_setDepthMode(ar_session_, ar_config, AR_DEPTH_MODE_AUTOMATIC);
     } else {
         ArConfig_setDepthMode(ar_session_, ar_config, AR_DEPTH_MODE_DISABLED);
