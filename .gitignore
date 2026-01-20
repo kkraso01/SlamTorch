@@ -1,0 +1,133 @@
+# Built application files
+*.apk
+*.ap_
+*.aab
+
+# Files for the ART/Dalvik VM
+*.dex
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+release/
+
+# Gradle files
+.gradle/
+build/
+*/build/
+gradlew
+gradlew.bat
+gradle-wrapper.jar
+gradle-wrapper.properties
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Android Studio
+*.iml
+.idea/
+.idea/*
+.idea/caches/
+.idea/libraries/
+.idea/modules.xml
+.idea/workspace.xml
+.idea/navEditor.xml
+.idea/assetWizardSettings.xml
+.idea/dictionaries
+.idea/gradle.xml
+.idea/jarRepositories.xml
+.idea/compiler.xml
+.idea/misc.xml
+.idea/vcs.xml
+.DS_Store
+
+# NDK
+obj/
+.externalNativeBuild/
+.cxx/
+cmake-build-*/
+*.so
+*.o
+*.a
+
+# Captures
+/captures
+*.log
+
+# Keystore files
+*.jks
+*.keystore
+
+# Android Profiler
+*.hprof
+
+# Kotlin
+*.kotlin_module
+
+# External native build folder generated in Android Studio 2.2 and later
+.externalNativeBuild
+
+# Google Services (e.g. APIs or Firebase)
+google-services.json
+
+# Freeline
+freeline.py
+freeline/
+freeline_project_description.json
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
+fastlane/readme.md
+
+# Version control
+.svn/
+.git/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Misc
+*.swp
+*~
+*.tmp
+*.bak
+*.orig
