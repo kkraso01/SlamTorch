@@ -10,9 +10,7 @@ extern "C" {
 JNIEXPORT void JNICALL
 Java_com_example_slamtorch_MainActivity_nativeUpdateRotation(JNIEnv* env, jobject /* this */, jint rotation) {
     if (g_renderer) {
-        // Convert Android rotation (0,1,2,3) to degrees (0,90,180,270)
-        int rotation_degrees = rotation * 90;
-        g_renderer->UpdateRotation(rotation_degrees);
+        g_renderer->UpdateRotation(rotation);
     }
 }
 
@@ -30,6 +28,18 @@ Java_com_example_slamtorch_MainActivity_nativeCycleTorch(JNIEnv* env, jobject /*
     }
 }
 
+JNIEXPORT void JNICALL
+Java_com_example_slamtorch_MainActivity_nativeSetTorchMode(JNIEnv* env, jobject /* this */, jint mode) {
+    if (!g_renderer) return;
+    auto torch_mode = ArCoreSlam::TorchMode::AUTO;
+    if (mode == 1) {
+        torch_mode = ArCoreSlam::TorchMode::MANUAL_ON;
+    } else if (mode == 2) {
+        torch_mode = ArCoreSlam::TorchMode::MANUAL_OFF;
+    }
+    g_renderer->SetTorchMode(torch_mode);
+}
+
 JNIEXPORT jobject JNICALL
 Java_com_example_slamtorch_MainActivity_nativeGetDebugStats(JNIEnv* env, jobject /* this */) {
     if (!g_renderer) return nullptr;
@@ -37,33 +47,37 @@ Java_com_example_slamtorch_MainActivity_nativeGetDebugStats(JNIEnv* env, jobject
     auto stats = g_renderer->GetDebugStats();
     
     // Find MainActivity$DebugStats class
-    jclass statsClass = env->FindClass("com/example/slamtorch/MainActivity$DebugStats");
+    static jclass statsClass = nullptr;
+    static jmethodID constructor = nullptr;
     if (!statsClass) {
-        __android_log_print(ANDROID_LOG_ERROR, "SlamTorch", "Failed to find DebugStats class");
-        return nullptr;
+        jclass localClass = env->FindClass("com/example/slamtorch/MainActivity$DebugStats");
+        if (!localClass) {
+            __android_log_print(ANDROID_LOG_ERROR, "SlamTorch", "Failed to find DebugStats class");
+            return nullptr;
+        }
+        statsClass = reinterpret_cast<jclass>(env->NewGlobalRef(localClass));
+        env->DeleteLocalRef(localClass);
     }
-    
-    // Get constructor
-    jmethodID constructor = env->GetMethodID(statsClass, "<init>", 
-        "(Ljava/lang/String;IIFLjava/lang/String;Z)V");
     if (!constructor) {
-        __android_log_print(ANDROID_LOG_ERROR, "SlamTorch", "Failed to find DebugStats constructor");
-        return nullptr;
+        constructor = env->GetMethodID(statsClass, "<init>",
+            "(Ljava/lang/String;IIFLjava/lang/String;ZZ)V");
+        if (!constructor) {
+            __android_log_print(ANDROID_LOG_ERROR, "SlamTorch", "Failed to find DebugStats constructor");
+            return nullptr;
+        }
     }
     
     // Create Java strings
-    jstring trackingState = env->NewStringUTF(stats.tracking_state.c_str());
-    jstring torchMode = env->NewStringUTF(stats.torch_mode.c_str());
+    jstring trackingState = env->NewStringUTF(stats.tracking_state);
+    jstring torchMode = env->NewStringUTF(stats.torch_mode);
     
     // Create DebugStats object
     jobject result = env->NewObject(statsClass, constructor,
         trackingState, stats.point_count, stats.map_points, stats.fps,
-        torchMode, stats.depth_enabled);
+        torchMode, stats.torch_enabled, stats.depth_enabled);
     
     env->DeleteLocalRef(trackingState);
     env->DeleteLocalRef(torchMode);
-    env->DeleteLocalRef(statsClass);
-    
     return result;
 }
 

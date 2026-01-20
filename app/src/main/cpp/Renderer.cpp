@@ -34,7 +34,9 @@ Renderer::Renderer(android_app *pApp) :
     background_renderer_->Initialize();
     
     // CRITICAL: Set camera texture BEFORE first ArSession_update()
-    background_renderer_->SetCameraTexture(ar_slam_->GetSession());
+    if (ar_slam_ && ar_slam_->GetSession()) {
+        background_renderer_->SetCameraTexture(ar_slam_->GetSession());
+    }
     
     point_cloud_renderer_ = std::make_unique<PointCloudRenderer>();
     point_cloud_renderer_->Initialize();
@@ -91,11 +93,8 @@ void Renderer::render() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     // Update ARCore SLAM (acquires frame, camera, point cloud)
-    if (ar_slam_) {
+    if (ar_slam_ && ar_slam_->GetSession()) {
         ar_slam_->Update(env_);
-        
-        // Update camera texture binding after ArSession_update
-        background_renderer_->UpdateCameraTexture(ar_slam_->GetSession());
         
         ArTrackingState tracking_state = ar_slam_->GetTrackingState();
         static int log_counter = 0;
@@ -186,11 +185,11 @@ void Renderer::OnResume() {
     if (ar_slam_) ar_slam_->OnResume(env_);
 }
 
-void Renderer::UpdateRotation(int rotation_degrees) {
-    display_rotation_ = rotation_degrees / 90;  // Convert to 0,1,2,3
+void Renderer::UpdateRotation(int display_rotation) {
+    display_rotation_ = display_rotation;
     if (ar_slam_ && width_ > 0 && height_ > 0) {
         ar_slam_->OnSurfaceChanged(display_rotation_, width_, height_);
-        __android_log_print(ANDROID_LOG_INFO, "SlamTorch", "Rotation updated: %d degrees", rotation_degrees);
+        __android_log_print(ANDROID_LOG_INFO, "SlamTorch", "Rotation updated: %d", display_rotation);
     }
 }
 
@@ -217,23 +216,29 @@ void Renderer::CycleTorchMode() {
     }
 }
 
+void Renderer::SetTorchMode(ArCoreSlam::TorchMode mode) {
+    if (!ar_slam_) return;
+    ar_slam_->SetTorchMode(mode);
+}
+
 DebugStats Renderer::GetDebugStats() const {
     DebugStats stats;
+    stats.tracking_state = "NONE";
+    stats.torch_mode = "NONE";
+    stats.torch_enabled = false;
+    stats.depth_enabled = false;
     
     if (ar_slam_) {
         ArTrackingState state = ar_slam_->GetTrackingState();
         stats.tracking_state = (state == AR_TRACKING_STATE_TRACKING) ? "TRACKING" :
-                              (state == AR_TRACKING_STATE_PAUSED) ? "PAUSED" : "STOPPED";
+                               (state == AR_TRACKING_STATE_PAUSED) ? "PAUSED" : "STOPPED";
         
         auto mode = ar_slam_->GetTorchMode();
         stats.torch_mode = (mode == ArCoreSlam::TorchMode::AUTO) ? "AUTO" :
-                          (mode == ArCoreSlam::TorchMode::MANUAL_ON) ? "ON" : "OFF";
+                           (mode == ArCoreSlam::TorchMode::MANUAL_ON) ? "ON" : "OFF";
+        stats.torch_enabled = ar_slam_->IsTorchOn();
         
         stats.depth_enabled = ar_slam_->IsDepthEnabled();
-    } else {
-        stats.tracking_state = "NONE";
-        stats.torch_mode = "NONE";
-        stats.depth_enabled = false;
     }
     
     stats.point_count = current_point_count_;

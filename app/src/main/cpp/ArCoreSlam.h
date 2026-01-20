@@ -33,6 +33,8 @@ public:
     void SetTorchMode(TorchMode mode) { torch_mode_ = mode; }
     TorchMode GetTorchMode() const { return torch_mode_; }
     bool IsDepthEnabled() const { return depth_enabled_; }
+    bool IsTorchOn() const { return current_torch_state_; }
+    bool IsTorchAvailable() const { return torch_available_; }
 
 private:
     ArSession* ar_session_ = nullptr;
@@ -50,14 +52,21 @@ private:
     // Torch control
     TorchMode torch_mode_ = TorchMode::AUTO;
     bool current_torch_state_ = false;
+    bool pending_torch_state_ = false;
+    int torch_pending_frames_ = 0;
+    bool torch_available_ = false;
     int display_rotation_ = 0;
-    float light_intensity_hysteresis_ = 0.0f;
+    int ar_frame_width_ = 0;
+    int ar_frame_height_ = 0;
     
     jobject activity_obj_ = nullptr;
+    JavaVM* java_vm_ = nullptr;
     jmethodID set_torch_method_ = nullptr;
+    jmethodID is_torch_available_method_ = nullptr;
 
     void UpdateTorchLogic(JNIEnv* env, float light_intensity);
     void CallJavaSetTorch(JNIEnv* env, bool enabled);
+    void UpdateDisplayGeometry(int rotation, int width, int height);
 };
 
 #endif // SLAMTORCH_ARCORE_SLAM_H

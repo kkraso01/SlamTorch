@@ -2,7 +2,6 @@
 #include "AndroidOut.h"
 #include <android/log.h>
 #include <cstring>
-#include <cmath>
 
 namespace {
     const char* VERTEX_SHADER = R"(
@@ -43,6 +42,7 @@ namespace {
 }
 
 PersistentPointMap::PersistentPointMap(int max_points) {
+    (void)max_points;
     // Allocate fixed-size buffers
     point_buffer_ = new float[MAX_POINTS * 3];
     temp_transformed_ = new float[MAX_POINTS * 3];
@@ -51,8 +51,8 @@ PersistentPointMap::PersistentPointMap(int max_points) {
     InitGL();
     
     __android_log_print(ANDROID_LOG_INFO, "SlamTorch", 
-        "PersistentPointMap initialized: max=%d points, voxel_size=%.3fm, decimation=1/%d",
-        MAX_POINTS, VOXEL_SIZE, DECIMATION);
+        "PersistentPointMap initialized: max=%d points, decimation=1/%d",
+        MAX_POINTS, DECIMATION);
 }
 
 PersistentPointMap::~PersistentPointMap() {
@@ -129,24 +129,13 @@ void PersistentPointMap::CleanupGL() {
     if (program_) glDeleteProgram(program_);
 }
 
-PersistentPointMap::VoxelKey PersistentPointMap::GetVoxelKey(float x, float y, float z) const {
-    return VoxelKey{
-        static_cast<int16_t>(std::floor(x / VOXEL_SIZE)),
-        static_cast<int16_t>(std::floor(y / VOXEL_SIZE)),
-        static_cast<int16_t>(std::floor(z / VOXEL_SIZE))
-    };
-}
-
 bool PersistentPointMap::ShouldAddPoint(float x, float y, float z) const {
     // Check distance
     float dist_sq = x*x + y*y + z*z;
     if (dist_sq > MAX_DISTANCE * MAX_DISTANCE) {
         return false;
     }
-    
-    // Check voxel deduplication
-    VoxelKey key = GetVoxelKey(x, y, z);
-    return voxel_set_.find(key) == voxel_set_.end();
+    return true;
 }
 
 void PersistentPointMap::TransformPoint(const float* mat, float x, float y, float z, float* out) const {
@@ -184,13 +173,7 @@ void PersistentPointMap::AddPoints(const float* world_from_camera, const float* 
             // Add to ring buffer
             int idx = write_index_ * 3;
             
-            // If overwriting, remove old voxel
             if (current_count_ == MAX_POINTS) {
-                float old_x = point_buffer_[idx + 0];
-                float old_y = point_buffer_[idx + 1];
-                float old_z = point_buffer_[idx + 2];
-                VoxelKey old_key = GetVoxelKey(old_x, old_y, old_z);
-                voxel_set_.erase(old_key);
                 has_wrapped_ = true;
             }
             
@@ -198,9 +181,6 @@ void PersistentPointMap::AddPoints(const float* world_from_camera, const float* 
             point_buffer_[idx + 0] = wx;
             point_buffer_[idx + 1] = wy;
             point_buffer_[idx + 2] = wz;
-            
-            VoxelKey key = GetVoxelKey(wx, wy, wz);
-            voxel_set_.insert(key);
             
             write_index_ = (write_index_ + 1) % MAX_POINTS;
             if (current_count_ < MAX_POINTS) {
@@ -274,7 +254,6 @@ void PersistentPointMap::Clear() {
     write_index_ = 0;
     total_added_ = 0;
     has_wrapped_ = false;
-    voxel_set_.clear();
     memset(point_buffer_, 0, MAX_POINTS * 3 * sizeof(float));
     
     __android_log_print(ANDROID_LOG_INFO, "SlamTorch", "PersistentPointMap cleared");
