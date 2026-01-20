@@ -3,6 +3,7 @@
 
 #include "arcore/arcore_c_api.h"
 #include <android/native_window.h>
+#include <cstdint>
 #include <jni.h>
 
 class ArCoreSlam {
@@ -27,6 +28,26 @@ public:
     void GetProjectionMatrix(float near, float far, float* out_matrix) const;
     void GetWorldFromCameraMatrix(float* out_matrix) const;  // For persistent mapping
     const ArPointCloud* GetPointCloud() const { return ar_point_cloud_; }
+    const char* GetLastTrackingFailureReason() const { return last_tracking_failure_reason_; }
+
+    // CPU image acquisition (Y plane only). Returns true if image copied.
+    bool AcquireCameraImageY(uint8_t* dst, int dst_stride, int dst_capacity,
+                             int* out_width, int* out_height);
+
+    // Depth image acquisition (16-bit). Caller must release via ReleaseDepthImage.
+    struct DepthImageInfo {
+        const uint16_t* data = nullptr;
+        int width = 0;
+        int height = 0;
+        int row_stride = 0;
+        int pixel_stride = 0;
+    };
+    bool AcquireDepthImage16(DepthImageInfo* out_info, ArImage** out_image);
+    void ReleaseDepthImage(ArImage* image);
+
+    // Camera intrinsics (image space)
+    void GetImageDimensions(int* out_width, int* out_height) const;
+    void GetCameraIntrinsics(float* out_fx, float* out_fy, float* out_cx, float* out_cy) const;
 
     // Torch Logic
     enum class TorchMode { AUTO, MANUAL_ON, MANUAL_OFF };
@@ -43,11 +64,19 @@ private:
     ArCamera* ar_camera_ = nullptr;
     ArPose* ar_pose_ = nullptr;
     ArLightEstimate* ar_light_estimate_ = nullptr;
+    ArCameraIntrinsics* ar_intrinsics_ = nullptr;
     
     ArTrackingState tracking_state_ = AR_TRACKING_STATE_STOPPED;
     bool install_requested_ = false;
     bool depth_enabled_ = false;
     bool camera_intrinsics_logged_ = false;
+    int32_t image_width_ = 0;
+    int32_t image_height_ = 0;
+    float intrinsics_fx_ = 0.0f;
+    float intrinsics_fy_ = 0.0f;
+    float intrinsics_cx_ = 0.0f;
+    float intrinsics_cy_ = 0.0f;
+    const char* last_tracking_failure_reason_ = "NONE";
 
     // Torch control
     TorchMode torch_mode_ = TorchMode::AUTO;

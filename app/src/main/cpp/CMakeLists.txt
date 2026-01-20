@@ -26,6 +26,10 @@ add_library(slamtorch SHARED
         BackgroundRenderer.cpp
         PointCloudRenderer.cpp
         PersistentPointMap.cpp
+        OpticalFlowTracker.cpp
+        LandmarkMap.cpp
+        KeyframeLite.cpp
+        DebugHud.cpp
         JniBridge.cpp)
 
 target_include_directories(slamtorch PRIVATE
