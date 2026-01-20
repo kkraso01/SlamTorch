@@ -24,12 +24,15 @@ add_library(slamtorch SHARED
         Utility.cpp
         ArCoreSlam.cpp
         BackgroundRenderer.cpp
+        DepthMapper.cpp
+        DepthOverlayRenderer.cpp
         PointCloudRenderer.cpp
         PersistentPointMap.cpp
         OpticalFlowTracker.cpp
         LandmarkMap.cpp
         KeyframeLite.cpp
         DebugHud.cpp
+        VoxelMapRenderer.cpp
         JniBridge.cpp)
 
 target_include_directories(slamtorch PRIVATE

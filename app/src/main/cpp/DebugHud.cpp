@@ -9,7 +9,17 @@ void DebugHud::Update(const ArCoreSlam* slam,
                       int stable_tracks,
                       float avg_track_age,
                       float depth_hit_rate,
-                      float fps) {
+                      float fps,
+                      bool depth_supported,
+                      const char* depth_mode,
+                      int depth_width,
+                      int depth_height,
+                      float depth_min_m,
+                      float depth_max_m,
+                      int voxels_used,
+                      int points_fused_per_second,
+                      bool map_enabled,
+                      bool depth_overlay_enabled) {
     data_.point_count = point_count;
     data_.map_points = map_points;
     data_.bearing_landmarks = bearing_landmarks;
@@ -19,6 +29,16 @@ void DebugHud::Update(const ArCoreSlam* slam,
     data_.avg_track_age = avg_track_age;
     data_.depth_hit_rate = depth_hit_rate;
     data_.fps = fps;
+    data_.depth_supported = depth_supported;
+    data_.depth_mode = depth_mode;
+    data_.depth_width = depth_width;
+    data_.depth_height = depth_height;
+    data_.depth_min_m = depth_min_m;
+    data_.depth_max_m = depth_max_m;
+    data_.voxels_used = voxels_used;
+    data_.points_fused_per_second = points_fused_per_second;
+    data_.map_enabled = map_enabled;
+    data_.depth_overlay_enabled = depth_overlay_enabled;
     data_.tracking_state = "NONE";
     data_.torch_mode = "NONE";
     data_.last_failure_reason = "NONE";
@@ -37,4 +57,5 @@ void DebugHud::Update(const ArCoreSlam* slam,
                        (mode == ArCoreSlam::TorchMode::MANUAL_ON) ? "ON" : "OFF";
     data_.torch_enabled = slam->IsTorchOn();
     data_.depth_enabled = slam->IsDepthEnabled();
+    data_.depth_supported = slam->IsDepthSupported();
 }

@@ -2,6 +2,7 @@
 #define SLAMTORCH_ARCORE_SLAM_H
 
 #include "arcore/arcore_c_api.h"
+#include "DepthFrame.h"
 #include <android/native_window.h>
 #include <cstdint>
 #include <jni.h>
@@ -35,14 +36,9 @@ public:
                              int* out_width, int* out_height);
 
     // Depth image acquisition (16-bit). Caller must release via ReleaseDepthImage.
-    struct DepthImageInfo {
-        const uint16_t* data = nullptr;
-        int width = 0;
-        int height = 0;
-        int row_stride = 0;
-        int pixel_stride = 0;
-    };
-    bool AcquireDepthImage16(DepthImageInfo* out_info, ArImage** out_image);
+    enum class DepthSource { OFF, DEPTH, RAW };
+    bool AcquireDepthFrame(DepthSource source, DepthFrame* out_frame,
+                           ArImage** out_depth_image, ArImage** out_confidence_image);
     void ReleaseDepthImage(ArImage* image);
 
     // Camera intrinsics (image space)
@@ -54,6 +50,7 @@ public:
     void SetTorchMode(TorchMode mode) { torch_mode_ = mode; }
     TorchMode GetTorchMode() const { return torch_mode_; }
     bool IsDepthEnabled() const { return depth_enabled_; }
+    bool IsDepthSupported() const { return depth_supported_; }
     bool IsTorchOn() const { return current_torch_state_; }
     bool IsTorchAvailable() const { return torch_available_; }
 
@@ -69,6 +66,7 @@ private:
     ArTrackingState tracking_state_ = AR_TRACKING_STATE_STOPPED;
     bool install_requested_ = false;
     bool depth_enabled_ = false;
+    bool depth_supported_ = false;
     bool camera_intrinsics_logged_ = false;
     int32_t image_width_ = 0;
     int32_t image_height_ = 0;

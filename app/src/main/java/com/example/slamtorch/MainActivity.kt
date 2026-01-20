@@ -24,7 +24,9 @@ class MainActivity : GameActivity() {
     private lateinit var debugToggleButton: MaterialButton
     private lateinit var clearMapButton: MaterialButton
     private lateinit var torchToggleGroup: MaterialButtonToggleGroup
-    private var debugEnabled = false
+    private lateinit var depthToggleGroup: MaterialButtonToggleGroup
+    private lateinit var mapToggleButton: MaterialButton
+    private var debugEnabled = true
     private var uiCreated = false
     private val uiHandler = Handler(Looper.getMainLooper())
     private var displayManager: DisplayManager? = null
@@ -33,6 +35,9 @@ class MainActivity : GameActivity() {
     private external fun nativeUpdateRotation(rotation: Int)
     private external fun nativeClearMap()
     private external fun nativeSetTorchMode(mode: Int)
+    private external fun nativeSetDepthMode(mode: Int)
+    private external fun nativeSetMapEnabled(enabled: Boolean)
+    private external fun nativeSetDebugEnabled(enabled: Boolean)
     private external fun nativeGetDebugStats(): DebugStats
 
     companion object {
@@ -40,6 +45,9 @@ class MainActivity : GameActivity() {
         private const val TORCH_MODE_AUTO = 0
         private const val TORCH_MODE_ON = 1
         private const val TORCH_MODE_OFF = 2
+        private const val DEPTH_MODE_OFF = 0
+        private const val DEPTH_MODE_DEPTH = 1
+        private const val DEPTH_MODE_RAW = 2
         
         init {
             System.loadLibrary("slamtorch")
@@ -60,6 +68,16 @@ class MainActivity : GameActivity() {
         val torchMode: String,
         val torchEnabled: Boolean,
         val depthEnabled: Boolean,
+        val depthSupported: Boolean,
+        val depthMode: String,
+        val depthWidth: Int,
+        val depthHeight: Int,
+        val depthMinM: Float,
+        val depthMaxM: Float,
+        val voxelsUsed: Int,
+        val pointsFusedPerSecond: Int,
+        val mapEnabled: Boolean,
+        val depthOverlayEnabled: Boolean,
         val lastFailureReason: String
     )
 
@@ -103,14 +121,26 @@ class MainActivity : GameActivity() {
         debugToggleButton = overlay.findViewById(R.id.debugToggleButton)
         clearMapButton = overlay.findViewById(R.id.clearMapButton)
         torchToggleGroup = overlay.findViewById(R.id.torchToggleGroup)
+        depthToggleGroup = overlay.findViewById(R.id.depthToggleGroup)
+        mapToggleButton = overlay.findViewById(R.id.mapToggleButton)
         
         debugToggleButton.setOnClickListener {
             debugEnabled = debugToggleButton.isChecked
             debugOverlay.visibility = if (debugEnabled) View.VISIBLE else View.GONE
+            nativeSetDebugEnabled(debugEnabled)
             if (debugEnabled) startDebugUpdates()
         }
+        debugToggleButton.isChecked = true
+        debugOverlay.visibility = View.VISIBLE
+        nativeSetDebugEnabled(true)
+        startDebugUpdates()
 
         clearMapButton.setOnClickListener { nativeClearMap() }
+        mapToggleButton.setOnClickListener {
+            val enabled = mapToggleButton.isChecked
+            nativeSetMapEnabled(enabled)
+            mapToggleButton.text = if (enabled) "Map ON" else "Map OFF"
+        }
 
         torchToggleGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
             if (!isChecked) return@addOnButtonCheckedListener
@@ -121,6 +151,17 @@ class MainActivity : GameActivity() {
             }
         }
         torchToggleGroup.check(R.id.torchAutoButton)
+        depthToggleGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+            if (!isChecked) return@addOnButtonCheckedListener
+            when (checkedId) {
+                R.id.depthOffButton -> nativeSetDepthMode(DEPTH_MODE_OFF)
+                R.id.depthDepthButton -> nativeSetDepthMode(DEPTH_MODE_DEPTH)
+                R.id.depthRawButton -> nativeSetDepthMode(DEPTH_MODE_RAW)
+            }
+        }
+        depthToggleGroup.check(R.id.depthDepthButton)
+        mapToggleButton.isChecked = true
+        mapToggleButton.text = "Map ON"
         if (!torchController.isTorchAvailable()) {
             torchToggleGroup.isEnabled = false
             overlay.findViewById<View>(R.id.torchAutoButton).isEnabled = false
@@ -146,6 +187,11 @@ class MainActivity : GameActivity() {
                         } else {
                             stats.torchMode
                         }
+                        val depthState = if (!stats.depthSupported) {
+                            "UNSUPPORTED"
+                        } else {
+                            "${stats.depthMode} ${if (stats.depthEnabled) "ON" else "OFF"}"
+                        }
                         debugOverlay.text = """
                             Track: ${stats.trackingState}
                             Fail: ${stats.lastFailureReason}
@@ -154,9 +200,12 @@ class MainActivity : GameActivity() {
                             Tracks: ${stats.trackedFeatures} (Stable: ${stats.stableTracks})
                             Avg age: ${"%.1f".format(stats.avgTrackAge)}
                             Depth hit: ${"%.0f".format(stats.depthHitRate)}%
+                            Depth: $depthState (${stats.depthWidth}x${stats.depthHeight})
+                            Depth min/max: ${"%.2f".format(stats.depthMinM)} / ${"%.2f".format(stats.depthMaxM)} m
+                            Voxels: ${stats.voxelsUsed} (fused/s: ${stats.pointsFusedPerSecond})
                             FPS: ${"%.1f".format(stats.fps)}
                             Torch: $torchState
-                            Depth: ${if (stats.depthEnabled) "YES" else "NO"}
+                            Map: ${if (stats.mapEnabled) "ON" else "OFF"} / Overlay: ${if (stats.depthOverlayEnabled) "ON" else "OFF"}
                         """.trimIndent()
                     } catch (e: Exception) {
                         debugOverlay.text = "Stats unavailable"

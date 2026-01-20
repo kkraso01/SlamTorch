@@ -40,6 +40,30 @@ Java_com_example_slamtorch_MainActivity_nativeSetTorchMode(JNIEnv* env, jobject 
     g_renderer->SetTorchMode(torch_mode);
 }
 
+JNIEXPORT void JNICALL
+Java_com_example_slamtorch_MainActivity_nativeSetDepthMode(JNIEnv* env, jobject /* this */, jint mode) {
+    if (!g_renderer) return;
+    ArCoreSlam::DepthSource depth_source = ArCoreSlam::DepthSource::OFF;
+    if (mode == 1) {
+        depth_source = ArCoreSlam::DepthSource::DEPTH;
+    } else if (mode == 2) {
+        depth_source = ArCoreSlam::DepthSource::RAW;
+    }
+    g_renderer->SetDepthMode(depth_source);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_slamtorch_MainActivity_nativeSetMapEnabled(JNIEnv* env, jobject /* this */, jboolean enabled) {
+    if (!g_renderer) return;
+    g_renderer->SetMapEnabled(enabled == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_slamtorch_MainActivity_nativeSetDebugEnabled(JNIEnv* env, jobject /* this */, jboolean enabled) {
+    if (!g_renderer) return;
+    g_renderer->SetDebugOverlayEnabled(enabled == JNI_TRUE);
+}
+
 JNIEXPORT jobject JNICALL
 Java_com_example_slamtorch_MainActivity_nativeGetDebugStats(JNIEnv* env, jobject /* this */) {
     if (!g_renderer) return nullptr;
@@ -60,7 +84,7 @@ Java_com_example_slamtorch_MainActivity_nativeGetDebugStats(JNIEnv* env, jobject
     }
     if (!constructor) {
         constructor = env->GetMethodID(statsClass, "<init>",
-            "(Ljava/lang/String;IIIIIIFFFLjava/lang/String;ZZLjava/lang/String;)V");
+            "(Ljava/lang/String;IIIIIIFFFLjava/lang/String;ZZZLjava/lang/String;IIFFIIZZLjava/lang/String;)V");
         if (!constructor) {
             __android_log_print(ANDROID_LOG_ERROR, "SlamTorch", "Failed to find DebugStats constructor");
             return nullptr;
@@ -73,14 +97,20 @@ Java_com_example_slamtorch_MainActivity_nativeGetDebugStats(JNIEnv* env, jobject
     jstring failureReason = env->NewStringUTF(stats.last_failure_reason);
     
     // Create DebugStats object
+    jstring depthMode = env->NewStringUTF(stats.depth_mode);
+
     jobject result = env->NewObject(statsClass, constructor,
         trackingState, stats.point_count, stats.map_points, stats.bearing_landmarks,
         stats.metric_landmarks, stats.tracked_features, stats.stable_tracks,
         stats.avg_track_age, stats.depth_hit_rate, stats.fps,
-        torchMode, stats.torch_enabled, stats.depth_enabled, failureReason);
+        torchMode, stats.torch_enabled, stats.depth_enabled, stats.depth_supported,
+        depthMode, stats.depth_width, stats.depth_height, stats.depth_min_m, stats.depth_max_m,
+        stats.voxels_used, stats.points_fused_per_second, stats.map_enabled, stats.depth_overlay_enabled,
+        failureReason);
     
     env->DeleteLocalRef(trackingState);
     env->DeleteLocalRef(torchMode);
+    env->DeleteLocalRef(depthMode);
     env->DeleteLocalRef(failureReason);
     return result;
 }

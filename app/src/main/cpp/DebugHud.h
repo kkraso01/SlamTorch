@@ -18,6 +18,16 @@ struct DebugHudData {
     float fps = 0.0f;
     bool torch_enabled = false;
     bool depth_enabled = false;
+    bool depth_supported = false;
+    const char* depth_mode = "OFF";
+    int depth_width = 0;
+    int depth_height = 0;
+    float depth_min_m = 0.0f;
+    float depth_max_m = 0.0f;
+    int voxels_used = 0;
+    int points_fused_per_second = 0;
+    bool map_enabled = false;
+    bool depth_overlay_enabled = false;
 };
 
 class DebugHud {
@@ -31,7 +41,17 @@ public:
                 int stable_tracks,
                 float avg_track_age,
                 float depth_hit_rate,
-                float fps);
+                float fps,
+                bool depth_supported,
+                const char* depth_mode,
+                int depth_width,
+                int depth_height,
+                float depth_min_m,
+                float depth_max_m,
+                int voxels_used,
+                int points_fused_per_second,
+                bool map_enabled,
+                bool depth_overlay_enabled);
     const DebugHudData& GetData() const { return data_; }
 
 private:

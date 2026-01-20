@@ -2,6 +2,7 @@
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 #include <GLES3/gl3.h>
 #include <assert.h>
+#include <algorithm>
 #include <cmath>
 #include <time.h>
 #include "AndroidOut.h"
@@ -33,6 +34,9 @@ Renderer::Renderer(android_app *pApp) :
     // Initialize renderers
     background_renderer_ = std::make_unique<BackgroundRenderer>();
     background_renderer_->Initialize();
+
+    depth_overlay_renderer_ = std::make_unique<DepthOverlayRenderer>();
+    depth_overlay_renderer_->Initialize();
     
     // CRITICAL: Set camera texture BEFORE first ArSession_update()
     if (ar_slam_ && ar_slam_->GetSession()) {
@@ -45,6 +49,9 @@ Renderer::Renderer(android_app *pApp) :
     landmark_map_ = std::make_unique<LandmarkMap>(20000);
     optical_flow_ = std::make_unique<OpticalFlowTracker>(800, 3);
     debug_hud_ = std::make_unique<DebugHud>();
+    depth_mapper_ = std::make_unique<DepthMapper>();
+    voxel_map_renderer_ = std::make_unique<VoxelMapRenderer>();
+    voxel_map_renderer_->Initialize();
     
     // Initialize last-known matrices to identity
     for (int i = 0; i < 16; ++i) {
@@ -57,6 +64,7 @@ Renderer::Renderer(android_app *pApp) :
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     fps_last_time_ = ts.tv_sec + ts.tv_nsec / 1e9;
+    points_fused_last_time_ = fps_last_time_;
 }
 
 Renderer::~Renderer() {
@@ -92,6 +100,11 @@ void Renderer::render() {
         frame_count_ = 0;
         fps_last_time_ = current_time;
     }
+    if (current_time - points_fused_last_time_ >= 1.0) {
+        current_points_fused_per_second_ = points_fused_accumulator_;
+        points_fused_accumulator_ = 0;
+        points_fused_last_time_ = current_time;
+    }
 
     // Clear screen
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -118,6 +131,8 @@ void Renderer::render() {
         background_renderer_->Draw(ar_slam_->GetSession(), ar_slam_->GetFrame());
         
         // 2. Accumulate and render 3D content
+        int image_width = 0;
+        int image_height = 0;
         if (tracking_state == AR_TRACKING_STATE_TRACKING) {
             // Get camera matrices for 3D rendering
             ar_slam_->GetViewMatrix(view_matrix_);
@@ -156,8 +171,6 @@ void Renderer::render() {
             );
 
             // 4. CPU image acquisition and optical flow tracking
-            int image_width = 0;
-            int image_height = 0;
             ar_slam_->GetImageDimensions(&image_width, &image_height);
             if (landmark_map_) {
                 landmark_map_->BeginFrame();
@@ -188,9 +201,11 @@ void Renderer::render() {
                             float fx = 0.0f, fy = 0.0f, cx = 0.0f, cy = 0.0f;
                             ar_slam_->GetCameraIntrinsics(&fx, &fy, &cx, &cy);
 
-                            ArCoreSlam::DepthImageInfo depth_info;
+                            DepthFrame depth_frame;
                             ArImage* depth_image = nullptr;
-                            const bool depth_ok = ar_slam_->AcquireDepthImage16(&depth_info, &depth_image);
+                            ArImage* confidence_image = nullptr;
+                            const bool depth_ok = ar_slam_->AcquireDepthFrame(depth_source_, &depth_frame,
+                                                                             &depth_image, &confidence_image);
 
                             const OpticalFlowTracker::Track* tracks = optical_flow_->GetTracks();
                             const int track_count = optical_flow_->GetTrackCount();
@@ -222,25 +237,25 @@ void Renderer::render() {
                                     bearing_z / bearing_len
                                 };
 
-                                if (!depth_ok || !depth_info.data) {
+                                if (!depth_ok || !depth_frame.depth_data) {
                                     const float confidence = 0.4f + 0.4f * (track.stable_count / 30.0f);
                                     landmark_map_->AddBearingObservation(bearing, confidence);
                                     continue;
                                 }
 
-                                const float depth_scale_x = static_cast<float>(depth_info.width) /
+                                const float depth_scale_x = static_cast<float>(depth_frame.width) /
                                                             static_cast<float>(image_width);
-                                const float depth_scale_y = static_cast<float>(depth_info.height) /
+                                const float depth_scale_y = static_cast<float>(depth_frame.height) /
                                                             static_cast<float>(image_height);
                                 const int px = static_cast<int>(track.x * depth_scale_x);
                                 const int py = static_cast<int>(track.y * depth_scale_y);
-                                if (px < 0 || py < 0 || px >= depth_info.width || py >= depth_info.height) {
+                                if (px < 0 || py < 0 || px >= depth_frame.width || py >= depth_frame.height) {
                                     continue;
                                 }
 
-                                const uint8_t* row = reinterpret_cast<const uint8_t*>(depth_info.data) +
-                                                     depth_info.row_stride * py;
-                                const uint16_t* depth_pixel = reinterpret_cast<const uint16_t*>(row + depth_info.pixel_stride * px);
+                                const uint8_t* row = reinterpret_cast<const uint8_t*>(depth_frame.depth_data) +
+                                                     depth_frame.row_stride * py;
+                                const uint16_t* depth_pixel = reinterpret_cast<const uint16_t*>(row + depth_frame.pixel_stride * px);
                                 const uint16_t depth_mm = *depth_pixel;
                                 depth_attempts++;
                                 if (depth_mm == 0) continue;
@@ -282,6 +297,9 @@ void Renderer::render() {
                             if (depth_image) {
                                 ar_slam_->ReleaseDepthImage(depth_image);
                             }
+                            if (confidence_image) {
+                                ar_slam_->ReleaseDepthImage(confidence_image);
+                            }
                         }
                     }
                 }
@@ -293,11 +311,108 @@ void Renderer::render() {
             }
         }
         
+        // Update depth mapper and overlay for room mapping
+        if (tracking_state == AR_TRACKING_STATE_TRACKING) {
+            DepthFrame depth_frame;
+            ArImage* depth_image = nullptr;
+            ArImage* confidence_image = nullptr;
+            const bool depth_ok = ar_slam_->AcquireDepthFrame(depth_source_, &depth_frame,
+                                                             &depth_image, &confidence_image);
+            if (depth_ok) {
+                current_depth_width_ = depth_frame.width;
+                current_depth_height_ = depth_frame.height;
+
+                float min_depth = 0.0f;
+                float max_depth = 0.0f;
+                const int stride = 4;
+                for (int y = 0; y < depth_frame.height; y += stride) {
+                    const uint8_t* row = reinterpret_cast<const uint8_t*>(depth_frame.depth_data) +
+                                         depth_frame.row_stride * y;
+                    for (int x = 0; x < depth_frame.width; x += stride) {
+                        const uint16_t* depth_pixel = reinterpret_cast<const uint16_t*>(row + depth_frame.pixel_stride * x);
+                        const uint16_t depth_mm = *depth_pixel;
+                        if (depth_mm == 0) continue;
+                        const float depth_m = static_cast<float>(depth_mm) * 0.001f;
+                        if (min_depth == 0.0f || depth_m < min_depth) min_depth = depth_m;
+                        if (depth_m > max_depth) max_depth = depth_m;
+                    }
+                }
+                current_depth_min_m_ = min_depth;
+                current_depth_max_m_ = max_depth;
+
+                if (depth_mapper_ && map_enabled_) {
+                    float fx = 0.0f, fy = 0.0f, cx = 0.0f, cy = 0.0f;
+                    ar_slam_->GetCameraIntrinsics(&fx, &fy, &cx, &cy);
+                    depth_mapper_->SetEnabled(map_enabled_);
+                    depth_mapper_->Update(depth_frame, fx, fy, cx, cy, image_width, image_height, last_good_world_from_camera_);
+                    const auto& stats = depth_mapper_->GetStats();
+                    current_voxels_used_ = stats.voxels_used;
+                    points_fused_accumulator_ += stats.points_fused_last_frame;
+
+                    bool dirty = false;
+                    int render_count = 0;
+                    const float* points = depth_mapper_->GetRenderPoints(&render_count, &dirty);
+                    if (dirty && voxel_map_renderer_) {
+                        voxel_map_renderer_->UpdatePoints(points, render_count);
+                    }
+                }
+
+                if (debug_overlay_enabled_ && depth_overlay_renderer_) {
+                    const int debug_size = depth_frame.width * depth_frame.height;
+                    if (static_cast<int>(depth_debug_buffer_.size()) != debug_size) {
+                        depth_debug_buffer_.assign(debug_size, 0);
+                    }
+                    const float min_depth_vis = (current_depth_min_m_ > 0.0f) ? current_depth_min_m_ : 0.2f;
+                    const float max_depth_vis = (current_depth_max_m_ > min_depth_vis) ? current_depth_max_m_ : 6.0f;
+                    const float inv_range = 1.0f / std::max(0.001f, max_depth_vis - min_depth_vis);
+                    for (int y = 0; y < depth_frame.height; ++y) {
+                        const uint8_t* row = reinterpret_cast<const uint8_t*>(depth_frame.depth_data) +
+                                             depth_frame.row_stride * y;
+                        uint8_t* dst_row = depth_debug_buffer_.data() + y * depth_frame.width;
+                        for (int x = 0; x < depth_frame.width; ++x) {
+                            const uint16_t* depth_pixel = reinterpret_cast<const uint16_t*>(row + depth_frame.pixel_stride * x);
+                            const uint16_t depth_mm = *depth_pixel;
+                            if (depth_mm == 0) {
+                                dst_row[x] = 0;
+                                continue;
+                            }
+                            const float depth_m = static_cast<float>(depth_mm) * 0.001f;
+                            const float normalized = 1.0f - std::min(1.0f, std::max(0.0f, (depth_m - min_depth_vis) * inv_range));
+                            dst_row[x] = static_cast<uint8_t>(normalized * 255.0f);
+                        }
+                    }
+                    depth_overlay_renderer_->UpdateTexture(depth_debug_buffer_.data(),
+                                                           depth_frame.width, depth_frame.height);
+                }
+            } else {
+                current_depth_width_ = 0;
+                current_depth_height_ = 0;
+                current_depth_min_m_ = 0.0f;
+                current_depth_max_m_ = 0.0f;
+            }
+            if (depth_image) {
+                ar_slam_->ReleaseDepthImage(depth_image);
+            }
+            if (confidence_image) {
+                ar_slam_->ReleaseDepthImage(confidence_image);
+            }
+        }
+
         // 4. ALWAYS render persistent map (even when not tracking, using last good matrices)
         if (landmark_map_ && landmark_map_->GetPointCount() > 0) {
             const float* view_to_use = has_good_matrices_ ? last_good_view_ : view_matrix_;
             const float* proj_to_use = has_good_matrices_ ? last_good_proj_ : projection_matrix_;
             landmark_map_->Draw(view_to_use, proj_to_use, last_good_world_from_camera_);
+        }
+
+        if (voxel_map_renderer_ && map_enabled_ && voxel_map_renderer_->GetPointCount() > 0) {
+            const float* view_to_use = has_good_matrices_ ? last_good_view_ : view_matrix_;
+            const float* proj_to_use = has_good_matrices_ ? last_good_proj_ : projection_matrix_;
+            voxel_map_renderer_->Draw(view_to_use, proj_to_use);
+        }
+
+        if (debug_overlay_enabled_ && depth_overlay_renderer_) {
+            depth_overlay_renderer_->Draw();
         }
     }
 
@@ -325,6 +440,9 @@ void Renderer::ClearPersistentMap() {
     if (landmark_map_) {
         landmark_map_->Clear();
     }
+    if (depth_mapper_) {
+        depth_mapper_->Reset();
+    }
     if (optical_flow_) {
         optical_flow_->Reset();
     }
@@ -335,6 +453,9 @@ void Renderer::ClearPersistentMap() {
     current_stable_track_count_ = 0;
     current_avg_track_age_ = 0.0f;
     current_depth_hit_rate_ = 0.0f;
+    current_voxels_used_ = 0;
+    current_points_fused_per_second_ = 0;
+    points_fused_accumulator_ = 0;
 }
 
 void Renderer::CycleTorchMode() {
@@ -358,6 +479,21 @@ void Renderer::SetTorchMode(ArCoreSlam::TorchMode mode) {
     ar_slam_->SetTorchMode(mode);
 }
 
+void Renderer::SetDepthMode(ArCoreSlam::DepthSource mode) {
+    depth_source_ = mode;
+}
+
+void Renderer::SetMapEnabled(bool enabled) {
+    map_enabled_ = enabled;
+    if (!map_enabled_ && depth_mapper_) {
+        depth_mapper_->SetEnabled(false);
+    }
+}
+
+void Renderer::SetDebugOverlayEnabled(bool enabled) {
+    debug_overlay_enabled_ = enabled;
+}
+
 DebugStats Renderer::GetDebugStats() const {
     DebugStats stats;
     if (debug_hud_) {
@@ -369,12 +505,33 @@ DebugStats Renderer::GetDebugStats() const {
                            current_stable_track_count_,
                            current_avg_track_age_,
                            current_depth_hit_rate_,
-                           last_fps_);
+                           last_fps_,
+                           ar_slam_ ? ar_slam_->IsDepthSupported() : false,
+                           depth_source_ == ArCoreSlam::DepthSource::OFF ? "OFF" :
+                               (depth_source_ == ArCoreSlam::DepthSource::RAW ? "RAW" : "DEPTH"),
+                           current_depth_width_,
+                           current_depth_height_,
+                           current_depth_min_m_,
+                           current_depth_max_m_,
+                           current_voxels_used_,
+                           current_points_fused_per_second_,
+                           map_enabled_,
+                           debug_overlay_enabled_);
         const DebugHudData& data = debug_hud_->GetData();
         stats.tracking_state = data.tracking_state;
         stats.torch_mode = data.torch_mode;
         stats.torch_enabled = data.torch_enabled;
         stats.depth_enabled = data.depth_enabled;
+        stats.depth_supported = data.depth_supported;
+        stats.depth_mode = data.depth_mode;
+        stats.depth_width = data.depth_width;
+        stats.depth_height = data.depth_height;
+        stats.depth_min_m = data.depth_min_m;
+        stats.depth_max_m = data.depth_max_m;
+        stats.voxels_used = data.voxels_used;
+        stats.points_fused_per_second = data.points_fused_per_second;
+        stats.map_enabled = data.map_enabled;
+        stats.depth_overlay_enabled = data.depth_overlay_enabled;
         stats.last_failure_reason = data.last_failure_reason;
         stats.point_count = data.point_count;
         stats.map_points = data.map_points;
@@ -390,6 +547,16 @@ DebugStats Renderer::GetDebugStats() const {
         stats.torch_mode = "NONE";
         stats.torch_enabled = false;
         stats.depth_enabled = false;
+        stats.depth_supported = false;
+        stats.depth_mode = "OFF";
+        stats.depth_width = 0;
+        stats.depth_height = 0;
+        stats.depth_min_m = 0.0f;
+        stats.depth_max_m = 0.0f;
+        stats.voxels_used = 0;
+        stats.points_fused_per_second = 0;
+        stats.map_enabled = false;
+        stats.depth_overlay_enabled = false;
         stats.last_failure_reason = "NONE";
         stats.point_count = 0;
         stats.map_points = 0;
