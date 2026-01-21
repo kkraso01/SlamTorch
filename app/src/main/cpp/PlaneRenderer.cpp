@@ -2,6 +2,7 @@
 #include "AndroidOut.h"
 #include <cmath>
 #include <algorithm>
+#include <vector>
 
 namespace {
 constexpr char kPlaneVertexShader[] = R"(
@@ -201,12 +202,19 @@ void PlaneRenderer::Update(const ArSession* session, const ArTrackableList* plan
         }
 
         ArPlane* plane = ArAsPlane(trackable);
-        const float* polygon = nullptr;
         int32_t polygon_size = 0;
-        // ARCore NDK: ArPlane_getPolygon returns [x0, z0, x1, z1, ...] in plane-local space.
-        ArPlane_getPolygon(session, plane, &polygon, &polygon_size);
+        ArPlane_getPolygonSize(session, plane, &polygon_size);
         const int vertex_count = polygon_size / 2;
-        if (!polygon || vertex_count < 3) {
+        if (polygon_size <= 0 || vertex_count < 3) {
+            ArTrackable_release(trackable);
+            continue;
+        }
+
+        std::vector<float> polygon_xz(static_cast<size_t>(polygon_size));
+        // ARCore NDK: ArPlane_getPolygon returns [x0, z0, x1, z1, ...] in plane-local space.
+        ArPlane_getPolygon(session, plane, polygon_xz.data());
+        const float* polygon = polygon_xz.data();
+        if (!polygon) {
             ArTrackable_release(trackable);
             continue;
         }

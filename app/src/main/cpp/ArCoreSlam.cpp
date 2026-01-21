@@ -354,7 +354,7 @@ bool ArCoreSlam::AcquireDepthFrame(DepthSource source, DepthFrame* out_frame,
 
     int32_t width = 0;
     int32_t height = 0;
-    int32_t format = 0;
+    ArImageFormat format = AR_IMAGE_FORMAT_INVALID;
     int64_t timestamp = 0;
     ArImage_getWidth(ar_session_, depth_image, &width);
     ArImage_getHeight(ar_session_, depth_image, &height);
@@ -383,7 +383,7 @@ bool ArCoreSlam::AcquireDepthFrame(DepthSource source, DepthFrame* out_frame,
         ArImage* confidence_image = nullptr;
         ArStatus conf_status = ArFrame_acquireRawDepthConfidenceImage(ar_session_, ar_frame_, &confidence_image);
         if (conf_status == AR_SUCCESS && confidence_image) {
-            int32_t conf_format = 0;
+            ArImageFormat conf_format = AR_IMAGE_FORMAT_INVALID;
             ArImage_getFormat(ar_session_, confidence_image, &conf_format);
             const uint8_t* conf_plane_data = nullptr;
             int32_t conf_length = 0;
