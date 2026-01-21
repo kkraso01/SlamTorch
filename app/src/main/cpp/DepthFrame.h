@@ -10,12 +10,12 @@ struct DepthFrame {
     int height = 0;
     int row_stride = 0;
     int pixel_stride = 0;
-    int32_t format = 0;
+    ArImageFormat format = AR_IMAGE_FORMAT_INVALID;
     int64_t timestamp_ns = 0;
     const uint8_t* confidence_data = nullptr;
     int confidence_row_stride = 0;
     int confidence_pixel_stride = 0;
-    int32_t confidence_format = 0;
+    ArImageFormat confidence_format = AR_IMAGE_FORMAT_INVALID;
     bool is_raw = false;
 };
 
