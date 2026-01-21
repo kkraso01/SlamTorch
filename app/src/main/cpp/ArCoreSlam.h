@@ -30,6 +30,8 @@ public:
     void GetWorldFromCameraMatrix(float* out_matrix) const;  // For persistent mapping
     const ArPointCloud* GetPointCloud() const { return ar_point_cloud_; }
     const char* GetLastTrackingFailureReason() const { return last_tracking_failure_reason_; }
+    void UpdatePlaneList();
+    const ArTrackableList* GetPlaneList() const { return plane_list_; }
 
     // CPU image acquisition (Y plane only). Returns true if image copied.
     bool AcquireCameraImageY(uint8_t* dst, int dst_stride, int dst_capacity,
@@ -62,6 +64,7 @@ private:
     ArPose* ar_pose_ = nullptr;
     ArLightEstimate* ar_light_estimate_ = nullptr;
     ArCameraIntrinsics* ar_intrinsics_ = nullptr;
+    ArTrackableList* plane_list_ = nullptr;
     
     ArTrackingState tracking_state_ = AR_TRACKING_STATE_STOPPED;
     bool install_requested_ = false;

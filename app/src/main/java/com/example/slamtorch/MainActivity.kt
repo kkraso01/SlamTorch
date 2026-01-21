@@ -23,9 +23,12 @@ class MainActivity : GameActivity() {
     private lateinit var debugOverlay: TextView
     private lateinit var debugToggleButton: MaterialButton
     private lateinit var clearMapButton: MaterialButton
+    private lateinit var clearMeshButton: MaterialButton
     private lateinit var torchToggleGroup: MaterialButtonToggleGroup
-    private lateinit var depthToggleGroup: MaterialButtonToggleGroup
+    private lateinit var depthMeshToggleGroup: MaterialButtonToggleGroup
     private lateinit var mapToggleButton: MaterialButton
+    private lateinit var planeToggleButton: MaterialButton
+    private lateinit var wireframeToggleButton: MaterialButton
     private var debugEnabled = true
     private var uiCreated = false
     private val uiHandler = Handler(Looper.getMainLooper())
@@ -35,9 +38,12 @@ class MainActivity : GameActivity() {
     private external fun nativeUpdateRotation(rotation: Int)
     private external fun nativeClearMap()
     private external fun nativeSetTorchMode(mode: Int)
-    private external fun nativeSetDepthMode(mode: Int)
     private external fun nativeSetMapEnabled(enabled: Boolean)
     private external fun nativeSetDebugEnabled(enabled: Boolean)
+    private external fun nativeSetPlanesEnabled(enabled: Boolean)
+    private external fun nativeSetDepthMeshMode(mode: Int)
+    private external fun nativeSetWireframeEnabled(enabled: Boolean)
+    private external fun nativeClearDepthMesh()
     private external fun nativeGetDebugStats(): DebugStats
 
     companion object {
@@ -78,7 +84,13 @@ class MainActivity : GameActivity() {
         val pointsFusedPerSecond: Int,
         val mapEnabled: Boolean,
         val depthOverlayEnabled: Boolean,
-        val lastFailureReason: String
+        val lastFailureReason: String,
+        val planesEnabled: Boolean,
+        val depthMeshMode: String,
+        val depthMeshWireframe: Boolean,
+        val depthMeshWidth: Int,
+        val depthMeshHeight: Int,
+        val depthMeshValidRatio: Float
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -120,9 +132,12 @@ class MainActivity : GameActivity() {
         debugOverlay = overlay.findViewById(R.id.debugOverlay)
         debugToggleButton = overlay.findViewById(R.id.debugToggleButton)
         clearMapButton = overlay.findViewById(R.id.clearMapButton)
+        clearMeshButton = overlay.findViewById(R.id.clearMeshButton)
         torchToggleGroup = overlay.findViewById(R.id.torchToggleGroup)
-        depthToggleGroup = overlay.findViewById(R.id.depthToggleGroup)
+        depthMeshToggleGroup = overlay.findViewById(R.id.depthMeshToggleGroup)
         mapToggleButton = overlay.findViewById(R.id.mapToggleButton)
+        planeToggleButton = overlay.findViewById(R.id.planeToggleButton)
+        wireframeToggleButton = overlay.findViewById(R.id.wireframeToggleButton)
         
         debugToggleButton.setOnClickListener {
             debugEnabled = debugToggleButton.isChecked
@@ -136,6 +151,7 @@ class MainActivity : GameActivity() {
         startDebugUpdates()
 
         clearMapButton.setOnClickListener { nativeClearMap() }
+        clearMeshButton.setOnClickListener { nativeClearDepthMesh() }
         mapToggleButton.setOnClickListener {
             val enabled = mapToggleButton.isChecked
             nativeSetMapEnabled(enabled)
@@ -151,17 +167,34 @@ class MainActivity : GameActivity() {
             }
         }
         torchToggleGroup.check(R.id.torchAutoButton)
-        depthToggleGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
+        depthMeshToggleGroup.addOnButtonCheckedListener { _, checkedId, isChecked ->
             if (!isChecked) return@addOnButtonCheckedListener
             when (checkedId) {
-                R.id.depthOffButton -> nativeSetDepthMode(DEPTH_MODE_OFF)
-                R.id.depthDepthButton -> nativeSetDepthMode(DEPTH_MODE_DEPTH)
-                R.id.depthRawButton -> nativeSetDepthMode(DEPTH_MODE_RAW)
+                R.id.meshOffButton -> nativeSetDepthMeshMode(DEPTH_MODE_OFF)
+                R.id.meshDepthButton -> nativeSetDepthMeshMode(DEPTH_MODE_DEPTH)
+                R.id.meshRawButton -> nativeSetDepthMeshMode(DEPTH_MODE_RAW)
             }
         }
-        depthToggleGroup.check(R.id.depthDepthButton)
+        depthMeshToggleGroup.check(R.id.meshOffButton)
+        nativeSetDepthMeshMode(DEPTH_MODE_OFF)
         mapToggleButton.isChecked = true
         mapToggleButton.text = "Map ON"
+
+        planeToggleButton.setOnClickListener {
+            val enabled = planeToggleButton.isChecked
+            nativeSetPlanesEnabled(enabled)
+            planeToggleButton.text = if (enabled) "Planes ON" else "Planes OFF"
+        }
+        planeToggleButton.isChecked = true
+        nativeSetPlanesEnabled(true)
+
+        wireframeToggleButton.setOnClickListener {
+            val enabled = wireframeToggleButton.isChecked
+            nativeSetWireframeEnabled(enabled)
+            wireframeToggleButton.text = if (enabled) "Wire ON" else "Wire OFF"
+        }
+        wireframeToggleButton.isChecked = false
+        nativeSetWireframeEnabled(false)
         if (!torchController.isTorchAvailable()) {
             torchToggleGroup.isEnabled = false
             overlay.findViewById<View>(R.id.torchAutoButton).isEnabled = false
@@ -192,6 +225,11 @@ class MainActivity : GameActivity() {
                         } else {
                             "${stats.depthMode} ${if (stats.depthEnabled) "ON" else "OFF"}"
                         }
+                        val meshState = if (!stats.depthSupported) {
+                            "UNSUPPORTED"
+                        } else {
+                            stats.depthMeshMode
+                        }
                         debugOverlay.text = """
                             Track: ${stats.trackingState}
                             Fail: ${stats.lastFailureReason}
@@ -202,6 +240,8 @@ class MainActivity : GameActivity() {
                             Depth hit: ${"%.0f".format(stats.depthHitRate)}%
                             Depth: $depthState (${stats.depthWidth}x${stats.depthHeight})
                             Depth min/max: ${"%.2f".format(stats.depthMinM)} / ${"%.2f".format(stats.depthMaxM)} m
+                            Mesh: $meshState (${stats.depthMeshWidth}x${stats.depthMeshHeight}) valid=${"%.0f".format(stats.depthMeshValidRatio * 100)}%
+                            Planes: ${if (stats.planesEnabled) "ON" else "OFF"} / Wire: ${if (stats.depthMeshWireframe) "ON" else "OFF"}
                             Voxels: ${stats.voxelsUsed} (fused/s: ${stats.pointsFusedPerSecond})
                             FPS: ${"%.1f".format(stats.fps)}
                             Torch: $torchState

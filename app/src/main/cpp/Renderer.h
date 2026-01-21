@@ -12,8 +12,10 @@
 #include "DebugHud.h"
 #include "DepthMapper.h"
 #include "DepthOverlayRenderer.h"
+#include "DepthMeshRenderer.h"
 #include "LandmarkMap.h"
 #include "OpticalFlowTracker.h"
+#include "PlaneRenderer.h"
 #include "PointCloudRenderer.h"
 #include "VoxelMapRenderer.h"
 
@@ -45,6 +47,12 @@ struct DebugStats {
     bool map_enabled;
     bool depth_overlay_enabled;
     const char* last_failure_reason;
+    bool planes_enabled;
+    const char* depth_mesh_mode;
+    bool depth_mesh_wireframe;
+    int depth_mesh_width;
+    int depth_mesh_height;
+    float depth_mesh_valid_ratio;
 };
 
 class Renderer {
@@ -67,6 +75,10 @@ public:
     void SetDepthMode(ArCoreSlam::DepthSource mode);
     void SetMapEnabled(bool enabled);
     void SetDebugOverlayEnabled(bool enabled);
+    void SetPlanesEnabled(bool enabled);
+    void SetDepthMeshMode(ArCoreSlam::DepthSource mode);
+    void SetDepthMeshWireframe(bool enabled);
+    void ClearDepthMesh();
     DebugStats GetDebugStats() const;
 
 private:
@@ -87,11 +99,13 @@ private:
     std::unique_ptr<ArCoreSlam> ar_slam_;
     std::unique_ptr<BackgroundRenderer> background_renderer_;
     std::unique_ptr<DepthOverlayRenderer> depth_overlay_renderer_;
+    std::unique_ptr<DepthMeshRenderer> depth_mesh_renderer_;
     std::unique_ptr<PointCloudRenderer> point_cloud_renderer_;
     std::unique_ptr<LandmarkMap> landmark_map_;
     std::unique_ptr<OpticalFlowTracker> optical_flow_;
     std::unique_ptr<DebugHud> debug_hud_;
     std::unique_ptr<DepthMapper> depth_mapper_;
+    std::unique_ptr<PlaneRenderer> plane_renderer_;
     std::unique_ptr<VoxelMapRenderer> voxel_map_renderer_;
     
     // JNI cached (attach once, not per-frame)
@@ -133,6 +147,12 @@ private:
     bool map_enabled_ = true;
     bool debug_overlay_enabled_ = false;
     ArCoreSlam::DepthSource depth_source_ = ArCoreSlam::DepthSource::DEPTH;
+    bool planes_enabled_ = true;
+    bool depth_mesh_wireframe_ = false;
+    ArCoreSlam::DepthSource depth_mesh_mode_ = ArCoreSlam::DepthSource::OFF;
+    int depth_mesh_width_ = 0;
+    int depth_mesh_height_ = 0;
+    float depth_mesh_valid_ratio_ = 0.0f;
 
     // CPU image buffer (Y plane)
     uint8_t* camera_image_buffer_ = nullptr;

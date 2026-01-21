@@ -28,6 +28,12 @@ struct DebugHudData {
     int points_fused_per_second = 0;
     bool map_enabled = false;
     bool depth_overlay_enabled = false;
+    bool planes_enabled = false;
+    const char* depth_mesh_mode = "OFF";
+    bool depth_mesh_wireframe = false;
+    int depth_mesh_width = 0;
+    int depth_mesh_height = 0;
+    float depth_mesh_valid_ratio = 0.0f;
 };
 
 class DebugHud {
@@ -51,7 +57,13 @@ public:
                 int voxels_used,
                 int points_fused_per_second,
                 bool map_enabled,
-                bool depth_overlay_enabled);
+                bool depth_overlay_enabled,
+                bool planes_enabled,
+                const char* depth_mesh_mode,
+                bool depth_mesh_wireframe,
+                int depth_mesh_width,
+                int depth_mesh_height,
+                float depth_mesh_valid_ratio);
     const DebugHudData& GetData() const { return data_; }
 
 private:
