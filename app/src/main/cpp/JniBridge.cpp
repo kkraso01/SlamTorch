@@ -53,6 +53,36 @@ Java_com_example_slamtorch_MainActivity_nativeSetDepthMode(JNIEnv* env, jobject 
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_slamtorch_MainActivity_nativeSetPlanesEnabled(JNIEnv* env, jobject /* this */, jboolean enabled) {
+    if (!g_renderer) return;
+    g_renderer->SetPlanesEnabled(enabled == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_slamtorch_MainActivity_nativeSetDepthMeshMode(JNIEnv* env, jobject /* this */, jint mode) {
+    if (!g_renderer) return;
+    ArCoreSlam::DepthSource depth_source = ArCoreSlam::DepthSource::OFF;
+    if (mode == 1) {
+        depth_source = ArCoreSlam::DepthSource::DEPTH;
+    } else if (mode == 2) {
+        depth_source = ArCoreSlam::DepthSource::RAW;
+    }
+    g_renderer->SetDepthMeshMode(depth_source);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_slamtorch_MainActivity_nativeSetWireframeEnabled(JNIEnv* env, jobject /* this */, jboolean enabled) {
+    if (!g_renderer) return;
+    g_renderer->SetDepthMeshWireframe(enabled == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_slamtorch_MainActivity_nativeClearDepthMesh(JNIEnv* env, jobject /* this */) {
+    if (!g_renderer) return;
+    g_renderer->ClearDepthMesh();
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_slamtorch_MainActivity_nativeSetMapEnabled(JNIEnv* env, jobject /* this */, jboolean enabled) {
     if (!g_renderer) return;
     g_renderer->SetMapEnabled(enabled == JNI_TRUE);
@@ -84,7 +114,7 @@ Java_com_example_slamtorch_MainActivity_nativeGetDebugStats(JNIEnv* env, jobject
     }
     if (!constructor) {
         constructor = env->GetMethodID(statsClass, "<init>",
-            "(Ljava/lang/String;IIIIIIFFFLjava/lang/String;ZZZLjava/lang/String;IIFFIIZZLjava/lang/String;)V");
+            "(Ljava/lang/String;IIIIIIFFFLjava/lang/String;ZZZLjava/lang/String;IIFFIIZZLjava/lang/String;ZLjava/lang/String;ZIIF)V");
         if (!constructor) {
             __android_log_print(ANDROID_LOG_ERROR, "SlamTorch", "Failed to find DebugStats constructor");
             return nullptr;
@@ -98,6 +128,7 @@ Java_com_example_slamtorch_MainActivity_nativeGetDebugStats(JNIEnv* env, jobject
     
     // Create DebugStats object
     jstring depthMode = env->NewStringUTF(stats.depth_mode);
+    jstring depthMeshMode = env->NewStringUTF(stats.depth_mesh_mode);
 
     jobject result = env->NewObject(statsClass, constructor,
         trackingState, stats.point_count, stats.map_points, stats.bearing_landmarks,
@@ -106,11 +137,13 @@ Java_com_example_slamtorch_MainActivity_nativeGetDebugStats(JNIEnv* env, jobject
         torchMode, stats.torch_enabled, stats.depth_enabled, stats.depth_supported,
         depthMode, stats.depth_width, stats.depth_height, stats.depth_min_m, stats.depth_max_m,
         stats.voxels_used, stats.points_fused_per_second, stats.map_enabled, stats.depth_overlay_enabled,
-        failureReason);
+        failureReason, stats.planes_enabled, depthMeshMode, stats.depth_mesh_wireframe,
+        stats.depth_mesh_width, stats.depth_mesh_height, stats.depth_mesh_valid_ratio);
     
     env->DeleteLocalRef(trackingState);
     env->DeleteLocalRef(torchMode);
     env->DeleteLocalRef(depthMode);
+    env->DeleteLocalRef(depthMeshMode);
     env->DeleteLocalRef(failureReason);
     return result;
 }

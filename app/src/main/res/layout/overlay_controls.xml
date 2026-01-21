@@ -64,7 +64,7 @@
         </com.google.android.material.button.MaterialButtonToggleGroup>
 
         <com.google.android.material.button.MaterialButtonToggleGroup
-            android:id="@+id/depthToggleGroup"
+            android:id="@+id/depthMeshToggleGroup"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
@@ -72,29 +72,29 @@
             app:selectionRequired="true">
 
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/depthOffButton"
+                android:id="@+id/meshOffButton"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="wrap_content"
                 android:layout_height="36dp"
-                android:text="Depth OFF"
+                android:text="Mesh OFF"
                 android:textAllCaps="false"
                 app:cornerRadius="18dp" />
 
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/depthDepthButton"
+                android:id="@+id/meshDepthButton"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="wrap_content"
                 android:layout_height="36dp"
-                android:text="Depth"
+                android:text="Mesh Depth"
                 android:textAllCaps="false"
                 app:cornerRadius="18dp" />
 
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/depthRawButton"
+                android:id="@+id/meshRawButton"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="wrap_content"
                 android:layout_height="36dp"
-                android:text="Raw"
+                android:text="Mesh Raw"
                 android:textAllCaps="false"
                 app:cornerRadius="18dp" />
         </com.google.android.material.button.MaterialButtonToggleGroup>
@@ -116,12 +116,12 @@
                 app:cornerRadius="18dp" />
 
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/clearMapButton"
+                android:id="@+id/clearMeshButton"
                 style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="wrap_content"
                 android:layout_height="36dp"
                 android:layout_marginStart="8dp"
-                android:text="Clear"
+                android:text="Clear Mesh"
                 android:textAllCaps="false"
                 app:cornerRadius="18dp" />
 
@@ -134,6 +134,44 @@
                 android:text="Map ON"
                 android:textAllCaps="false"
                 android:checkable="true"
+                app:cornerRadius="18dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/planeToggleButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="Planes ON"
+                android:textAllCaps="false"
+                android:checkable="true"
+                app:cornerRadius="18dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/wireframeToggleButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:text="Wire OFF"
+                android:textAllCaps="false"
+                android:checkable="true"
+                app:cornerRadius="18dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/clearMapButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:layout_marginStart="8dp"
+                android:text="Clear Map"
+                android:textAllCaps="false"
                 app:cornerRadius="18dp" />
         </LinearLayout>
     </LinearLayout>

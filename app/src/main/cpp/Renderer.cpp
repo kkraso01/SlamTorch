@@ -37,6 +37,9 @@ Renderer::Renderer(android_app *pApp) :
 
     depth_overlay_renderer_ = std::make_unique<DepthOverlayRenderer>();
     depth_overlay_renderer_->Initialize();
+
+    depth_mesh_renderer_ = std::make_unique<DepthMeshRenderer>();
+    depth_mesh_renderer_->Initialize(160, 120);
     
     // CRITICAL: Set camera texture BEFORE first ArSession_update()
     if (ar_slam_ && ar_slam_->GetSession()) {
@@ -50,6 +53,8 @@ Renderer::Renderer(android_app *pApp) :
     optical_flow_ = std::make_unique<OpticalFlowTracker>(800, 3);
     debug_hud_ = std::make_unique<DebugHud>();
     depth_mapper_ = std::make_unique<DepthMapper>();
+    plane_renderer_ = std::make_unique<PlaneRenderer>();
+    plane_renderer_->Initialize(ar_slam_ ? ar_slam_->GetSession() : nullptr);
     voxel_map_renderer_ = std::make_unique<VoxelMapRenderer>();
     voxel_map_renderer_->Initialize();
     
@@ -162,13 +167,11 @@ void Renderer::render() {
                     num_points, landmark_map_ ? landmark_map_->GetPointCount() : 0);
             }
             
-            // 3. Render ephemeral point cloud (current frame only)
-            point_cloud_renderer_->Draw(
-                ar_slam_->GetSession(),
-                point_cloud,
-                view_matrix_,
-                projection_matrix_
-            );
+            if (plane_renderer_ && planes_enabled_) {
+                ar_slam_->UpdatePlaneList();
+                plane_renderer_->SetEnabled(planes_enabled_);
+                plane_renderer_->Update(ar_slam_->GetSession(), ar_slam_->GetPlaneList());
+            }
 
             // 4. CPU image acquisition and optical flow tracking
             ar_slam_->GetImageDimensions(&image_width, &image_height);
@@ -316,7 +319,9 @@ void Renderer::render() {
             DepthFrame depth_frame;
             ArImage* depth_image = nullptr;
             ArImage* confidence_image = nullptr;
-            const bool depth_ok = ar_slam_->AcquireDepthFrame(depth_source_, &depth_frame,
+            const ArCoreSlam::DepthSource depth_frame_source =
+                depth_mesh_mode_ == ArCoreSlam::DepthSource::OFF ? depth_source_ : depth_mesh_mode_;
+            const bool depth_ok = ar_slam_->AcquireDepthFrame(depth_frame_source, &depth_frame,
                                                              &depth_image, &confidence_image);
             if (depth_ok) {
                 current_depth_width_ = depth_frame.width;
@@ -339,6 +344,31 @@ void Renderer::render() {
                 }
                 current_depth_min_m_ = min_depth;
                 current_depth_max_m_ = max_depth;
+
+                if (depth_mesh_renderer_) {
+                    if (depth_mesh_mode_ == ArCoreSlam::DepthSource::OFF) {
+                        depth_mesh_renderer_->Clear();
+                        depth_mesh_valid_ratio_ = 0.0f;
+                    } else {
+                        float fx = 0.0f, fy = 0.0f, cx = 0.0f, cy = 0.0f;
+                        ar_slam_->GetCameraIntrinsics(&fx, &fy, &cx, &cy);
+                        const float min_depth_mesh = std::max(0.2f, current_depth_min_m_ > 0.0f ? current_depth_min_m_ : 0.2f);
+                        const float max_depth_mesh = std::min(6.0f, current_depth_max_m_ > 0.0f ? current_depth_max_m_ : 6.0f);
+                        depth_mesh_renderer_->Update(depth_frame,
+                                                     image_width,
+                                                     image_height,
+                                                     fx,
+                                                     fy,
+                                                     cx,
+                                                     cy,
+                                                     last_good_world_from_camera_,
+                                                     min_depth_mesh,
+                                                     max_depth_mesh);
+                        depth_mesh_valid_ratio_ = depth_mesh_renderer_->GetValidRatio();
+                        depth_mesh_width_ = depth_mesh_renderer_->GetGridWidth();
+                        depth_mesh_height_ = depth_mesh_renderer_->GetGridHeight();
+                    }
+                }
 
                 if (depth_mapper_ && map_enabled_) {
                     float fx = 0.0f, fy = 0.0f, cx = 0.0f, cy = 0.0f;
@@ -389,6 +419,7 @@ void Renderer::render() {
                 current_depth_height_ = 0;
                 current_depth_min_m_ = 0.0f;
                 current_depth_max_m_ = 0.0f;
+                depth_mesh_valid_ratio_ = 0.0f;
             }
             if (depth_image) {
                 ar_slam_->ReleaseDepthImage(depth_image);
@@ -404,6 +435,26 @@ void Renderer::render() {
             const float* proj_to_use = has_good_matrices_ ? last_good_proj_ : projection_matrix_;
             landmark_map_->Draw(view_to_use, proj_to_use, last_good_world_from_camera_);
         }
+
+        if (depth_mesh_renderer_ && depth_mesh_mode_ != ArCoreSlam::DepthSource::OFF) {
+            const float* view_to_use = has_good_matrices_ ? last_good_view_ : view_matrix_;
+            const float* proj_to_use = has_good_matrices_ ? last_good_proj_ : projection_matrix_;
+            depth_mesh_renderer_->Draw(view_to_use, proj_to_use, depth_mesh_wireframe_);
+        }
+
+        if (plane_renderer_ && planes_enabled_) {
+            const float* view_to_use = has_good_matrices_ ? last_good_view_ : view_matrix_;
+            const float* proj_to_use = has_good_matrices_ ? last_good_proj_ : projection_matrix_;
+            plane_renderer_->Draw(view_to_use, proj_to_use);
+        }
+
+        // Render ephemeral point cloud (current frame only) after geometry overlays.
+        point_cloud_renderer_->Draw(
+            ar_slam_->GetSession(),
+            ar_slam_->GetPointCloud(),
+            has_good_matrices_ ? last_good_view_ : view_matrix_,
+            has_good_matrices_ ? last_good_proj_ : projection_matrix_
+        );
 
         if (voxel_map_renderer_ && map_enabled_ && voxel_map_renderer_->GetPointCount() > 0) {
             const float* view_to_use = has_good_matrices_ ? last_good_view_ : view_matrix_;
@@ -494,6 +545,31 @@ void Renderer::SetDebugOverlayEnabled(bool enabled) {
     debug_overlay_enabled_ = enabled;
 }
 
+void Renderer::SetPlanesEnabled(bool enabled) {
+    planes_enabled_ = enabled;
+    if (plane_renderer_) {
+        plane_renderer_->SetEnabled(enabled);
+    }
+}
+
+void Renderer::SetDepthMeshMode(ArCoreSlam::DepthSource mode) {
+    depth_mesh_mode_ = mode;
+    if (mode != ArCoreSlam::DepthSource::OFF) {
+        depth_source_ = mode;
+    }
+}
+
+void Renderer::SetDepthMeshWireframe(bool enabled) {
+    depth_mesh_wireframe_ = enabled;
+}
+
+void Renderer::ClearDepthMesh() {
+    if (depth_mesh_renderer_) {
+        depth_mesh_renderer_->Clear();
+    }
+    depth_mesh_valid_ratio_ = 0.0f;
+}
+
 DebugStats Renderer::GetDebugStats() const {
     DebugStats stats;
     if (debug_hud_) {
@@ -516,7 +592,14 @@ DebugStats Renderer::GetDebugStats() const {
                            current_voxels_used_,
                            current_points_fused_per_second_,
                            map_enabled_,
-                           debug_overlay_enabled_);
+                           debug_overlay_enabled_,
+                           planes_enabled_,
+                           depth_mesh_mode_ == ArCoreSlam::DepthSource::OFF ? "OFF" :
+                               (depth_mesh_mode_ == ArCoreSlam::DepthSource::RAW ? "RAW" : "DEPTH"),
+                           depth_mesh_wireframe_,
+                           depth_mesh_width_,
+                           depth_mesh_height_,
+                           depth_mesh_valid_ratio_);
         const DebugHudData& data = debug_hud_->GetData();
         stats.tracking_state = data.tracking_state;
         stats.torch_mode = data.torch_mode;
@@ -542,6 +625,12 @@ DebugStats Renderer::GetDebugStats() const {
         stats.avg_track_age = data.avg_track_age;
         stats.depth_hit_rate = data.depth_hit_rate;
         stats.fps = data.fps;
+        stats.planes_enabled = data.planes_enabled;
+        stats.depth_mesh_mode = data.depth_mesh_mode;
+        stats.depth_mesh_wireframe = data.depth_mesh_wireframe;
+        stats.depth_mesh_width = data.depth_mesh_width;
+        stats.depth_mesh_height = data.depth_mesh_height;
+        stats.depth_mesh_valid_ratio = data.depth_mesh_valid_ratio;
     } else {
         stats.tracking_state = "NONE";
         stats.torch_mode = "NONE";
@@ -567,6 +656,12 @@ DebugStats Renderer::GetDebugStats() const {
         stats.avg_track_age = 0.0f;
         stats.depth_hit_rate = 0.0f;
         stats.fps = 0.0f;
+        stats.planes_enabled = false;
+        stats.depth_mesh_mode = "OFF";
+        stats.depth_mesh_wireframe = false;
+        stats.depth_mesh_width = 0;
+        stats.depth_mesh_height = 0;
+        stats.depth_mesh_valid_ratio = 0.0f;
     }
     return stats;
 }

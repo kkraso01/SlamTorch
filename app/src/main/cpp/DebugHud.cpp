@@ -19,7 +19,13 @@ void DebugHud::Update(const ArCoreSlam* slam,
                       int voxels_used,
                       int points_fused_per_second,
                       bool map_enabled,
-                      bool depth_overlay_enabled) {
+                      bool depth_overlay_enabled,
+                      bool planes_enabled,
+                      const char* depth_mesh_mode,
+                      bool depth_mesh_wireframe,
+                      int depth_mesh_width,
+                      int depth_mesh_height,
+                      float depth_mesh_valid_ratio) {
     data_.point_count = point_count;
     data_.map_points = map_points;
     data_.bearing_landmarks = bearing_landmarks;
@@ -39,6 +45,12 @@ void DebugHud::Update(const ArCoreSlam* slam,
     data_.points_fused_per_second = points_fused_per_second;
     data_.map_enabled = map_enabled;
     data_.depth_overlay_enabled = depth_overlay_enabled;
+    data_.planes_enabled = planes_enabled;
+    data_.depth_mesh_mode = depth_mesh_mode;
+    data_.depth_mesh_wireframe = depth_mesh_wireframe;
+    data_.depth_mesh_width = depth_mesh_width;
+    data_.depth_mesh_height = depth_mesh_height;
+    data_.depth_mesh_valid_ratio = depth_mesh_valid_ratio;
     data_.tracking_state = "NONE";
     data_.torch_mode = "NONE";
     data_.last_failure_reason = "NONE";

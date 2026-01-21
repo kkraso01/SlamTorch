@@ -44,6 +44,7 @@ ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
     ArPose_create(ar_session_, nullptr, &ar_pose_);
     ArLightEstimate_create(ar_session_, &ar_light_estimate_);
     ArCameraIntrinsics_create(ar_session_, &ar_intrinsics_);
+    ArTrackableList_create(ar_session_, &plane_list_);
 
     ArConfig* ar_config = nullptr;
     ArConfig_create(ar_session_, &ar_config);
@@ -68,6 +69,9 @@ ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
     // Enable light estimation for better feature matching
     ArConfig_setLightEstimationMode(ar_session_, ar_config, AR_LIGHT_ESTIMATION_MODE_AMBIENT_INTENSITY);
 
+    // Enable plane finding (horizontal + vertical)
+    ArConfig_setPlaneFindingMode(ar_session_, ar_config, AR_PLANE_FINDING_MODE_HORIZONTAL_AND_VERTICAL);
+
     // Enable EIS if supported for more stable camera feed.
     int32_t eis_supported = 0;
     ArSession_isImageStabilizationModeSupported(ar_session_, AR_IMAGE_STABILIZATION_MODE_EIS, &eis_supported);
@@ -90,8 +94,6 @@ ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
         ArDepthMode depth_mode;
         ArConfig_getDepthMode(ar_session_, current_config, &depth_mode);
         depth_enabled_ = (depth_mode != AR_DEPTH_MODE_DISABLED);
-        ArConfig_destroy(current_config);
-        
         ArFocusMode focus_mode;
         ArConfig_getFocusMode(ar_session_, current_config, &focus_mode);
         __android_log_print(ANDROID_LOG_INFO, "SlamTorch",
@@ -99,6 +101,7 @@ ArCoreSlam::ArCoreSlam(JNIEnv* env, jobject activity) {
             focus_mode == AR_FOCUS_MODE_AUTO ? "AUTO" : "FIXED",
             depth_enabled_ ? "ENABLED" : "DISABLED",
             eis_supported != 0 ? "ON" : "OFF");
+        ArConfig_destroy(current_config);
     }
     ArConfig_destroy(ar_config);
 
@@ -125,6 +128,9 @@ ArCoreSlam::~ArCoreSlam() {
     }
     if (ar_intrinsics_) {
         ArCameraIntrinsics_destroy(ar_intrinsics_);
+    }
+    if (plane_list_) {
+        ArTrackableList_destroy(plane_list_);
     }
     if (ar_camera_) {
         ArCamera_release(ar_camera_);
@@ -275,6 +281,11 @@ void ArCoreSlam::Update(JNIEnv* env) {
             UpdateTorchLogic(env, pixel_intensity);
         }
     }
+}
+
+void ArCoreSlam::UpdatePlaneList() {
+    if (!ar_session_ || !plane_list_) return;
+    ArSession_getAllTrackables(ar_session_, AR_TRACKABLE_PLANE, plane_list_);
 }
 
 bool ArCoreSlam::AcquireCameraImageY(uint8_t* dst, int dst_stride, int dst_capacity,

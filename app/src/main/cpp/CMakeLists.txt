@@ -26,6 +26,8 @@ add_library(slamtorch SHARED
         BackgroundRenderer.cpp
         DepthMapper.cpp
         DepthOverlayRenderer.cpp
+        PlaneRenderer.cpp
+        DepthMeshRenderer.cpp
         PointCloudRenderer.cpp
         PersistentPointMap.cpp
         OpticalFlowTracker.cpp
